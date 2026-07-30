@@ -40,6 +40,8 @@ instruction decoder, and microcode ROM.
 
 Python doesn't simulate the CPU, Python IS the CPU
 
+*API concept:  [readme](include/api.h)*  
+
 - C provides the **execution units** (arithmetic, logic, shifts, memory)
 - Python provides the **control logic** (instruction fetch, decode, sequencing)
 - The separation mimics real CPU design (datapath vs. control unit)
