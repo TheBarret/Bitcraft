@@ -3,9 +3,8 @@
 A Python-Controlled Gate-Level Arithmetic Engine  
 
 ## Concept
-A Python library that exposes a complete 16-bit CPU data paths (ALU, memory, bus) implemented in C, but controlled entirely from Python.   
-The C engine provides the "hardware" primitives; Python acts as the control unit, instruction decoder, and microcode ROM.  
-
+A Python library that exposes a complete 16-bit CPU data paths (ALU, memory, bus) implemented in C,  
+but controlled entirely from Python.   
 
 ## Downsides
 
