@@ -128,6 +128,7 @@ Python doesn't simulate the CPU, Python IS the CPU
 Reference *API.H:  [readme](include/api.h)*  
 Reference *ALU.H:  [readme](include/alu.h)*  
 Reference *BUS.H:  [readme](include/bus.h)*  
+Reference *BINDING.PY:  [readme](binding.py)*  
 
 ### **1. Unified Addressing**
 - Registers (R0-R7) at addresses 0-7
