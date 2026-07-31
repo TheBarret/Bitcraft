@@ -96,8 +96,6 @@ You can access registers directly from the snapshot data.
 
 Python doesn't simulate the CPU, Python IS the CPU
 
-*API concept:  [readme](include/api.h)*  
-
 - C provides the **execution units** (arithmetic, logic, shifts, memory)
 - Python provides the **control logic** (instruction fetch, decode, sequencing)
 - The separation mimics real CPU design (datapath vs. control unit)
@@ -126,6 +124,10 @@ Python doesn't simulate the CPU, Python IS the CPU
 | **Mode Manager** | Uses SYS to reconfigure C ALU behavior |
 
 ---
+
+Reference *API.H:  [readme](include/api.h)*  
+Reference *ALU.H:  [readme](include/alu.h)*  
+Reference *BUS.H:  [readme](include/bus.h)*  
 
 ### **1. Unified Addressing**
 - Registers (R0-R7) at addresses 0-7
