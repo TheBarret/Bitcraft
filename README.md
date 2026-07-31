@@ -67,7 +67,12 @@ You can access registers directly from the snapshot data.
 ## Downsides
 
 **It's slow!**  
-- Python control adds overhead
+```
+Measured Speed        : ~0.079 MOPS/s
+Raw C ALU Baseline    : ~1.20 MOPS/s
+Python Control Cost   : ~15.2x
+```
+- Python control adds 11.82 µs added per cycle overhead
 - Each Python instruction can execute multiple C operations
 - Not suitable for high-performance computing
 
