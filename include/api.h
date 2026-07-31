@@ -1,112 +1,106 @@
-// api.h
+#ifndef API_H
+#define API_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include "bit.h"
+#include "bus.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
- * Concept API for Pythonic control
- *
+ * Standardized ALU Operation Codes
+ * Maps directly to 4-bit control words (0x0 to 0xF)
+ */
+typedef enum {
+    ALU_OP_ADD_VAL  = 0x0,
+    ALU_OP_SUB_VAL  = 0x1,
+    ALU_OP_AND_VAL  = 0x2,
+    ALU_OP_OR_VAL   = 0x3,
+    ALU_OP_XOR_VAL  = 0x4,
+    ALU_OP_NAND_VAL = 0x5,
+    ALU_OP_NOR_VAL  = 0x6,
+    ALU_OP_NOT_VAL  = 0x7,
+    ALU_OP_PASS_A_VAL = 0x8,
+    ALU_OP_PASS_B_VAL = 0x9,
+    ALU_OP_SHL_VAL  = 0xA,
+    ALU_OP_SHR_VAL  = 0xB,
+    ALU_OP_ROL_VAL  = 0xC,
+    ALU_OP_ROR_VAL  = 0xD,
+    ALU_OP_CMP_VAL  = 0xE,
+    ALU_OP_SYS_VAL  = 0xF
+} ALUOp;
 
- * Pseudo models:
+/*
+ * Machine Execution Modes
+ */
+typedef enum {
+    MODE_NORMAL = 0,
+    MODE_SATURATE = 1,
+    MODE_SIGNED = 2,
+    MODE_ROUND = 3,
+    MODE_POLARITY_INVERT = 4
+} MachineMode;
 
-    # binding.py
-    import ctypes
-
-    # 1. Load the compiled C library
-    lib = ctypes.CDLL('./bc.so')
-
-    # 2. Mirror the C 'bit' type (assuming it's 1 byte in C)
-    class Bit(ctypes.c_uint8):
-        pass
-
-    # 3. Mirror the C Struct exactly
-    class Machine(ctypes.Structure):
-        _fields_ = [
-            ("pc", ctypes.c_uint16),
-            ("registers", ctypes.c_uint16 * 8),
-            ("alu_wires", Bit * 64),
-            ("bus_lines", Bit * 16),
-            ("memory", Bit * (65536 * 16)),
-            ("cycle_count", ctypes.c_uint64),
-            ("halted", ctypes.c_uint8),
-        ]
-
-    # 4. Tell Python the exact C function signatures (Argument types and Return types)
-    lib.machine_init.argtypes = [ctypes.POINTER(Machine)]
-    lib.machine_run.argtypes = [ctypes.POINTER(Machine), ctypes.c_int]
-    # ...if more wanted...
-
-    # ----
-
-    #  machine.py
-    from binding import lib, Machine
-
-    class CPU:
-        def __init__(self):
-            # Python allocates the memory for the C struct
-            self._state = Machine()
-            # Pass a pointer to C to initialize it
-            lib.machine_init(ctypes.byref(self._state))
-
-        def load(self, program_hex_list):
-            # Convert Python list of ints to a C array of uint16_t
-            c_array = (ctypes.c_uint16 * len(program_hex_list))(*program_hex_list)
-            lib.machine_load(ctypes.byref(self._state), c_array, len(program_hex_list))
-
-        def run(self, max_cycles=1000):
-            # Tell C to run the engine. C mutates self._state directly in memory.
-            lib.machine_run(ctypes.byref(self._state), max_cycles)
-
-            # Return a snapshot/result object for inspection
-            return Snapshot(self._state)
-
-        # --- Todo: Inspection tools ---
-
-        @property
-        def pc(self):
-            return self._state.pc
-
-        @property
-        def registers(self):
-            # Convert C array to Python list for easy reading
-            return list(self._state.registers)
-
-        def peek_wire(self, wire_name):
-            # Example of gate-level inspection
-            if wire_name == "ALU_CARRY_OUT":
-                return bool(self._state.alu_wires[12]) # 12 is just an example index
-            # ... map other wire names to array indices ...
-
-
-    class Snapshot:
-        """A frozen view of the CPU state after a run()"""
-        def __init__(self, c_state):
-            self.cycles = c_state.cycle_count
-            self.halted = bool(c_state.halted)
-            self.pc = c_state.pc
-            self.registers = list(c_state.registers)
-
-        def __repr__(self):
-            return f"<Snapshot cycles={self.cycles} pc=0x{self.pc:04X}>"
-
-*/
-
-// 1. State Struct ("Dashboard")
-// Python needs to know the exact byte-size of this.
+/*
+ * Exposed Machine State
+ * Fully layout-stable for direct mapping into Python ctypes/CFFI.
+ */
 typedef struct {
-    uint16_t pc;
-    uint16_t registers[8];
+    Bus bus;                 /* System bus (memory size updated to 64K) */
+    uint16_t pc;             /* Program counter (Python-managed) */
+    uint64_t cycle_count;    /* Total execution cycles */
+    uint8_t halted;          /* Halt flag (1 = halted) */
 
-    // Because you want gate-level fidelity, you expose the raw wires.
-    // Assuming 'bit' is a 1-byte type (like uint8_t) in your C code:
-    bit alu_wires[64];
-    bit bus_lines[16];
-    bit memory[65536 * 16]; // 64k words of 16 bits
+    /* Internal wire and signal inspection */
+    bit alu_wires[64];       /* Gate-level ALU signal lines */
+    bit bus_lines[16];       /* Active bus data lines */
 
-    uint64_t cycle_count;
-    uint8_t halted;
+    /* Runtime Configuration */
+    uint8_t mode;
+    uint8_t saturation_enabled;
+    uint8_t signed_mode;
 } Machine;
 
-// 2. API Functions
-// We pass POINTERS to the state. We do not copy the struct.
+/* --- Lifecycle Management --- */
 void machine_init(Machine* state);
-void machine_load(Machine* state, uint16_t* program, int length);
-void machine_run(Machine* state, int max_cycles);
 void machine_reset(Machine* state);
+int machine_load_program(Machine* state, const uint16_t* program, size_t count);
+
+/* --- Execution Control --- */
+int machine_step(Machine* state);
+uint64_t machine_run(Machine* state, uint64_t max_cycles);
+void machine_halt(Machine* state);
+
+/* --- Core ALU Bridge --- */
+int machine_alu_op(Machine* state, uint16_t src1, uint16_t src2, uint16_t dest, ALUOp op);
+
+/* --- Memory & Register Access --- */
+int machine_write(Machine* state, uint16_t addr, uint16_t value);
+uint16_t machine_read(const Machine* state, uint16_t addr);
+uint16_t machine_get_register(const Machine* state, uint8_t reg);
+int machine_set_register(Machine* state, uint8_t reg, uint16_t value);
+
+/* --- Inspection Helpers --- */
+uint8_t machine_get_zero_flag(const Machine* state);
+uint8_t machine_get_carry_flag(const Machine* state);
+uint8_t machine_get_overflow_flag(const Machine* state);
+uint8_t machine_get_wire(const Machine* state, uint8_t index);
+
+/* --- Mode Management --- */
+void machine_set_mode(Machine* state, MachineMode mode);
+MachineMode machine_get_mode(const Machine* state);
+
+/* --- Debug & Diagnostics --- */
+void machine_snapshot(const Machine* state, uint16_t* memory_copy, uint16_t* registers_copy, uint16_t* flags);
+void machine_dump(Machine* state, uint16_t start, uint16_t end);
+const char* machine_op_to_string(ALUOp op);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* API_H */
