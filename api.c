@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <inttypes.h>
 
+// trace carry chain support
+#include "include/wires.h"
+#include "include/adder.h"
+
+
 /* Helper to convert ALUOp to control bits */
 static void op_to_control(ALUOp op, bit control[4]) {
     uint8_t val = (uint8_t)op & 0x0F;
@@ -197,6 +202,70 @@ void machine_snapshot(const Machine* state, uint16_t* memory_copy,
         flags[1] = bit_to_uint8(state->bus.flags.carry);
         flags[2] = bit_to_uint8(state->bus.flags.overflow);
     }
+}
+
+/* Trace carry chain support */
+static void trace_carry_chain(uint16_t a_val, uint16_t b_val, bit carry_in,
+                               bit wires_out[BIT_WORD_WIDTH]) {
+    bit A[BIT_WORD_WIDTH], B[BIT_WORD_WIDTH];
+    uint16_to_bits(a_val, A, BIT_WORD_WIDTH);
+    uint16_to_bits(b_val, B, BIT_WORD_WIDTH);
+
+    bit carry = carry_in;
+    for (size_t i = 0; i < BIT_WORD_WIDTH; i++) {
+        full_adder_result fa = full_adder(A[i], B[i], carry);
+        wires_out[i] = fa.carry_out;
+        carry = fa.carry_out;
+    }
+}
+
+int machine_alu_op_traced(Machine* state, uint16_t src1, uint16_t src2,
+                          uint16_t dest, ALUOp op) {
+    if (!state) return 0;
+
+    /* Read operands BEFORE the op runs — dest may alias src1/src2 */
+    uint16_t a_val = bus_read(&state->bus, src1);
+    uint16_t b_val = bus_read(&state->bus, src2);
+
+    bit control[4];
+    op_to_control(op, control);
+
+    int ok = bus_alu_op(&state->bus, src1, src2, dest, control);
+    if (!ok) return 0;
+
+    /* --- Control-bit wires --- */
+    for (int i = 0; i < 4; i++) {
+        state->alu_wires[WIRE_CONTROL_BASE + i] = control[i];
+    }
+
+    /* --- Result wires: read back what was actually written --- */
+    bit result_bits[BIT_WORD_WIDTH];
+    uint16_to_bits(bus_read(&state->bus, dest), result_bits, BIT_WORD_WIDTH);
+    for (int i = 0; i < BIT_WORD_WIDTH; i++) {
+        state->alu_wires[WIRE_RESULT_BASE + i] = result_bits[i];
+    }
+
+    /* --- Carry-chain wires: only meaningful for ADD/SUB/CMP --- */
+    if (op == ALU_OP_ADD_VAL || op == ALU_OP_SUB_VAL || op == ALU_OP_CMP_VAL) {
+        bit carry_in = (op == ALU_OP_ADD_VAL) ? BIT_ZERO : BIT_ONE;
+        uint16_t b_operand = (op == ALU_OP_ADD_VAL) ? b_val : (uint16_t)(~b_val);
+        bit carry_wires[BIT_WORD_WIDTH];
+        trace_carry_chain(a_val, b_operand, carry_in, carry_wires);
+        for (int i = 0; i < BIT_WORD_WIDTH; i++) {
+            state->alu_wires[WIRE_CARRY_BASE + i] = carry_wires[i];
+        }
+    } else {
+        for (int i = 0; i < BIT_WORD_WIDTH; i++) {
+            state->alu_wires[WIRE_CARRY_BASE + i] = BIT_ZERO;
+        }
+    }
+
+    /* --- Flags, straight from the real result --- */
+    state->alu_wires[WIRE_ZERO]       = state->bus.flags.zero;
+    state->alu_wires[WIRE_CARRY_FLAG] = state->bus.flags.carry;
+    state->alu_wires[WIRE_OVERFLOW]   = state->bus.flags.overflow;
+
+    return 1;
 }
 
 /* Debug helpers */
