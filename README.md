@@ -129,7 +129,7 @@ Python doesn't simulate the CPU, Python IS the CPU
 
 ### **1. Unified Addressing**
 - Registers (R0-R7) at addresses 0-7
-- RAM starting at address 8
+- RAM starting at address `0x0200` (512) marker
 - No distinction between register and memory operations
 
 ### **2. Three-Operand Instructions**
