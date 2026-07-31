@@ -46,8 +46,8 @@ typedef enum {
 } MachineMode;
 
 /*
- * Exposed Machine State
- * Fully layout-stable for direct mapping into Python ctypes/CFFI.
+ * Machine state
+ * Full layout, direct mapping into Python ctypes/CFFI.
  */
 typedef struct {
     Bus bus;                 /* System bus (memory size updated to 64K) */
@@ -96,6 +96,10 @@ MachineMode machine_get_mode(const Machine* state);
 
 /* --- Debug & Diagnostics --- */
 void machine_snapshot(const Machine* state, uint16_t* memory_copy, uint16_t* registers_copy, uint16_t* flags);
+
+int machine_alu_op_traced(Machine* state, uint16_t src1, uint16_t src2,
+                          uint16_t dest, ALUOp op);
+
 void machine_dump(Machine* state, uint16_t start, uint16_t end);
 const char* machine_op_to_string(ALUOp op);
 
