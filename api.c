@@ -57,7 +57,9 @@ int machine_step(Machine* state) {
     if (!state || state->halted) return 0;
 
     /* Fetch instruction from memory */
-    if (state->pc >= MEMORY_SIZE) {
+    // Todo: better value validation
+    // if MEMORY_SIZE = 65536
+    if (state->pc >= MEMORY_SIZE) { // never happens
         state->halted = 1;
         return 0;
     }

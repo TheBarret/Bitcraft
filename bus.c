@@ -13,27 +13,35 @@ void bus_init(Bus* bus) {
 }
 
 int bus_write(Bus* bus, uint16_t addr, uint16_t value) {
-    if (addr >= MEMORY_SIZE) {
-        return 0;
-    }
+    // Todo: better value validation
+    // if MEMORY_SIZE = 65536
+    //if (addr >= MEMORY_SIZE) { // never happens
+    //    return 0;
+    //}
     bus->memory[addr] = value;
     return 1;
 }
 
 uint16_t bus_read(const Bus* bus, uint16_t addr) {
-    if (addr >= MEMORY_SIZE) {
-        return 0;
-    }
+    // Todo: better value validation
+    // if MEMORY_SIZE = 65536
+    //if (addr >= MEMORY_SIZE) { // never happens
+    //    return 0;
+    //}
     return bus->memory[addr];
 }
 
 int bus_execute(Bus* bus, const bit control[4]) {
     /* Validate addresses */
-    if (bus->addr_a >= MEMORY_SIZE ||
-        bus->addr_b >= MEMORY_SIZE ||
-        bus->addr_dest >= MEMORY_SIZE) {
-        return 0;
-    }
+
+    // Todo: better value validation
+    // if MEMORY_SIZE = 65536
+
+    //if (bus->addr_a >= MEMORY_SIZE || // never happens
+    //    bus->addr_b >= MEMORY_SIZE || // never happens
+    //    bus->addr_dest >= MEMORY_SIZE) { // never happens
+    //    return 0;
+    //}
 
     /* Convert operands from uint16_t to bit[] arrays */
     bit A[BIT_WORD_WIDTH];
@@ -94,8 +102,10 @@ int bus_load_program(Bus* bus, const uint16_t* words, size_t count) {
 }
 
 void bus_dump(const Bus* bus, uint16_t start, uint16_t end) {
-    if (start >= MEMORY_SIZE) start = MEMORY_SIZE - 1;
-    if (end   >= MEMORY_SIZE) end   = MEMORY_SIZE - 1;
+    // Todo: better value validation
+    // if MEMORY_SIZE = 65536
+    //if (start >= MEMORY_SIZE) start = MEMORY_SIZE - 1; // never happens
+    //if (end   >= MEMORY_SIZE) end   = MEMORY_SIZE - 1; // never happens
     if (start > end) return;
 
     printf("Bus memory dump [%03u..%03u]:\n", start, end);

@@ -15,10 +15,9 @@ class AluFlags(ctypes.Structure):
         ("overflow", Bit),
     ]
 
-# 16bit Architecture
-# MEMORY_SIZE = 65536, NUM_REGISTERS = 16
+# This must be aligned with bus.h (MEMORY_SIZE)
 MEMORY_SIZE = 65536
-NUM_REGISTERS = 16
+NUM_REGISTERS = 8
 
 class Bus(ctypes.Structure):
     _fields_ = [

@@ -22,8 +22,6 @@ gcc $CFLAGS -c "$SRC_DIR/mux.c" -o "$BUILD_DIR/mux.o"
 gcc $CFLAGS -c "$SRC_DIR/alu.c" -o "$BUILD_DIR/alu.o"
 gcc $CFLAGS -c "$SRC_DIR/bus.c" -o "$BUILD_DIR/bus.o"
 gcc $CFLAGS -c "$SRC_DIR/api.c" -o "$BUILD_DIR/api.o"
-
-echo "[*] Linking shared library -> build/bc.so..."
 gcc $LDFLAGS "$BUILD_DIR/bit.o" "$BUILD_DIR/gates.o" "$BUILD_DIR/adder.o" "$BUILD_DIR/mux.o" "$BUILD_DIR/alu.o" "$BUILD_DIR/bus.o" "$BUILD_DIR/api.o" -o "$BUILD_DIR/bc.so"
 
 echo "Build complete: $BUILD_DIR/bc.so"
