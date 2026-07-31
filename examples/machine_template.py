@@ -30,7 +30,7 @@ class ALUOp(IntEnum):
     SYS = 0xF
 
 
-class SysSubtype(IntEnum):
+class SysExt(IntEnum):
     """SYS instruction subtypes (extended operations)"""
     HALT = 0x0      # Halt execution
     LD16 = 0x1      # Load from 16-bit address
@@ -67,7 +67,11 @@ class Instruction:
 
     def __repr__(self) -> str:
         if self.is_extended:
-            return f"<Subset dest={self.dest} addr=0x{self.address}, is_extended={self.is_extended}>"
+            if self.address is not None:
+                return f"<SYS.{SysExt(self.subtype).name} addr=0x{self.address:04X}, dest={self.dest}>"
+            if self.immediate is not None:
+                return f"<SYS.{SysExt(self.subtype).name} dest={self.dest} imm=0x{self.immediate:04X}>"
+            return f"<SYS.{SysExt(self.subtype).name}>"
         return f"<{ALUOp(self.opcode).name} dest={self.dest} src1={self.src1} src2={self.src2}>"
 
 
@@ -90,10 +94,12 @@ class CPUState:
 class CPU:
     """
     Core Model:
-    - Python is the CPU (decoder, PC, control)
-    - C is the datapath (ALU, memory, registers)
-    - Extended instructions (LD16/ST16) are implemented in Python
-    - SYS instruction acts as escape for Python-level operations
+    - Python is the CPU (decoder, PC, control), CPU.step()/CPU.run() are canonical.
+    - C is the datapath (ALU, memory, registers), called via direct field/function access.
+    - machine_step()/machine_run() on the underlying Machine (C) are LEGACY/UNSAFE for
+      any program containing SYS-prefixed (extended) instructions:
+      the C decoder has no concept of 2-word instructions and will misread the second word as a fresh opcode desyncing PC silently.
+      Do not call self._machine.step()/.run() directly once a program contains LD16/ST16/LDI16/JMP16/CALL16/RET/PUSH/POP.
     """
 
     # Memory constants
@@ -136,8 +142,10 @@ class CPU:
 
     def load_program(self, program: List[int], start: int = PROGRAM_START) -> bool:
         """Load program at specified address (default 0x0200)"""
-        # Load program starting at PROGRAM_START (currently 0x0200)
-        return bool(self._machine.load_program(program))
+        for i, word in enumerate(program):
+            if not self._machine.write_mem(start + i, word):
+                return False
+        return True
 
     def step(self) -> bool:
         """
@@ -161,17 +169,18 @@ class CPU:
         if not self._branch_taken:
             self.pc += decoded.words
         self._branch_taken = False
+        # added 0.2: python also adds cycles
+        self._machine.state.cycle_count += 1
 
         return True
 
     def run(self, max_cycles: int = 1000) -> int:
         """Run for specified cycles or until halted"""
-        cycles = 0
-        while cycles < max_cycles and not self.halted:
+        start = self.cycles
+        while (self.cycles - start) < max_cycles and not self.halted:
             if not self.step():
                 break
-            cycles += 1
-        return cycles
+        return self.cycles - start
 
     def halt(self) -> None:
         """Halt CPU execution"""
@@ -218,30 +227,30 @@ class CPU:
         # Fetch the second word (address/immediate)
         second_word = self._machine.read_mem(self.pc + 1)
 
-        if subtype == SysSubtype.LD16:
+        if subtype == SysExt.LD16:
             instr.dest = src1
             instr.address = second_word
-        elif subtype == SysSubtype.ST16:
+        elif subtype == SysExt.ST16:
             instr.address = second_word
             instr.src1 = src1  # Source register
-        elif subtype == SysSubtype.LDI16:
+        elif subtype == SysExt.LDI16:
             instr.dest = src1
             instr.immediate = second_word
-        elif subtype == SysSubtype.JMP16:
+        elif subtype == SysExt.JMP16:
             instr.address = second_word
             instr.words = 2
-        elif subtype == SysSubtype.CALL16:
+        elif subtype == SysExt.CALL16:
             instr.address = second_word
             instr.words = 2
-        elif subtype == SysSubtype.RET:
+        elif subtype == SysExt.RET:
             instr.words = 1  # RET is only 1 word
-        elif subtype == SysSubtype.PUSH:
+        elif subtype == SysExt.PUSH:
             instr.src1 = src1
             instr.words = 1
-        elif subtype == SysSubtype.POP:
+        elif subtype == SysExt.POP:
             instr.src1 = src1
             instr.words = 1
-        elif subtype == SysSubtype.HALT:
+        elif subtype == SysExt.HALT:
             instr.words = 1  # HALT is only 1 word
         else:
             instr.words = 1  # Unknown subtype, treat as 1 word
@@ -282,49 +291,49 @@ class CPU:
 
     def _execute_extended(self, instr: Instruction) -> None:
         """Execute extended (SYS) instruction"""
-        subtype = SysSubtype(instr.subtype)
+        subtype = SysExt(instr.subtype)
 
-        if subtype == SysSubtype.HALT:
+        if subtype == SysExt.HALT:
             self.halt()
 
-        elif subtype == SysSubtype.LD16:
+        elif subtype == SysExt.LD16:
             # Load from 16-bit address
             value = self._machine.read_mem(instr.address)
             self._machine.set_register(instr.dest, value)
 
-        elif subtype == SysSubtype.ST16:
+        elif subtype == SysExt.ST16:
             # Store to 16-bit address
             value = self._machine.get_register(instr.src1)
             self._machine.write_mem(instr.address, value)
 
-        elif subtype == SysSubtype.LDI16:
+        elif subtype == SysExt.LDI16:
             # Load 16-bit immediate
             self._machine.set_register(instr.dest, instr.immediate)
 
-        elif subtype == SysSubtype.JMP16:
+        elif subtype == SysExt.JMP16:
             # Jump to 16-bit address
             self.pc = instr.address
             self._branch_taken = True
 
-        elif subtype == SysSubtype.CALL16:
+        elif subtype == SysExt.CALL16:
             # Call subroutine
             self._call_stack.append(self.pc + 2)  # Return address after CALL
             self.pc = instr.address
             self._branch_taken = True
 
-        elif subtype == SysSubtype.RET:
+        elif subtype == SysExt.RET:
             # Return from subroutine
             if self._call_stack:
                 self.pc = self._call_stack.pop()
                 self._branch_taken = True
 
-        elif subtype == SysSubtype.PUSH:
+        elif subtype == SysExt.PUSH:
             # Push register to stack
             value = self._machine.get_register(instr.src1)
             self._stack_pointer -= 1
             self._machine.write_mem(self._stack_pointer, value)
 
-        elif subtype == SysSubtype.POP:
+        elif subtype == SysExt.POP:
             # Pop from stack to register
             value = self._machine.read_mem(self._stack_pointer)
             self._machine.set_register(instr.src1, value)
@@ -441,8 +450,8 @@ class CPU:
                 dest, src1, src2 = args
                 return [(opcode << 12) | (dest << 8) | (src1 << 4) | src2]
 
-        elif op in SysSubtype.__members__:
-            subtype = SysSubtype[op]
+        elif op in SysExt.__members__:
+            subtype = SysExt[op]
             if op == "LD16" and len(args) == 2:
                 dest, addr = args
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), addr & 0xFFFF]
