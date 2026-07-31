@@ -125,10 +125,7 @@ Python doesn't simulate the CPU, Python IS the CPU
 
 ---
 
-Reference *API.H:  [readme](include/api.h)*  
-Reference *ALU.H:  [readme](include/alu.h)*  
-Reference *BUS.H:  [readme](include/bus.h)*  
-Reference *BINDING.PY:  [readme](binding.py)*  
+## API
 
 ### **1. Unified Addressing**
 - Registers (R0-R7) at addresses 0-7
@@ -148,38 +145,7 @@ Reference *BINDING.PY:  [readme](binding.py)*
 - `SYS` opcode changes ALU behavior without recompilation
 - Modes: saturation, signed arithmetic, rounding, polarity changes
 
----
-
-## API
-
-### **Core Operations**
-```python
-cpu = CPU()                    # Create CPU instance
-cpu.memory[addr] = value       # Direct memory access (Pythonic)
-cpu.bus_read(addr)             # Read from bus
-cpu.bus_write(addr, value)     # Write to bus
-cpu.alu_op(src1, src2, dest, op) # Execute ALU operation
-```
-
-### **Control Operations**
-```python
-cpu.pc = address               # Program counter (Python-managed)
-cpu.step()                     # Execute one instruction
-cpu.run(cycles)                # Run for N cycles
-cpu.halt()                     # Stop execution
-```
-
-### **Mode Management**
-```python
-cpu.set_mode(mode)             # Change ALU behavior via SYS
-cpu.saturation(enable)         # Toggle saturation arithmetic
-cpu.signed_mode(enable)        # Toggle signed operations
-```
-
-### **Inspection**
-```python
-cpu.registers                  # Python list of current register values
-cpu.flags                      # Zero, Carry, Overflow booleans
-cpu.wires                      # Gate-level wire inspection
-cpu.snapshot()                 # Freeze current state
-```
+Reference *API.H:  [readme](include/api.h)*  
+Reference *ALU.H:  [readme](include/alu.h)*  
+Reference *BUS.H:  [readme](include/bus.h)*  
+Reference *BINDING.PY:  [readme](binding.py)*  
