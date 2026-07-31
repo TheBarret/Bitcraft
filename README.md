@@ -6,6 +6,61 @@ A Python-Controlled Gate-Level Arithmetic Engine
 A Python library that exposes a complete 16-bit CPU data paths (ALU, memory, bus) implemented in C,  
 but controlled entirely from Python.   
 
+## Working parts
+
+**Binding interface:**  
+
+This library will provide the communication between Python and C-runtime.  
+```py
+  from binding import Machine
+```
+
+**Loading the module:**  
+
+Loading the library (always reset/re-initialize for clearing old/unpredictable memory).  
+```py
+  def run():
+      try:
+          machine = Machine()
+          machine.reset()
+      except FileNotFoundError as e:
+          print(f"error: {e}")
+          sys.exit(1)
+```
+
+**Run a basic sum:**  
+
+The sum `42 + 16`, prepare three registers `r3 = r1 + r2  (0x002A + 0x0010 = 0x003A / 58 [decimal])`  
+
+
+```py
+  program = [
+          0x0312,  # R3 = R1 + R2
+          0xF000   # Halt placeholder for now *todo*
+      ]
+  
+  machine.set_register(1, 42)
+  machine.set_register(2, 16)
+```
+
+**Commit:**  
+
+We load the byte array into the bus, and invoke the `run()`.  
+
+```py
+  load_success = machine.load_program(program)
+  if load_success:
+    cycles = machine.run(max_cycles=5)
+```
+
+**Inspecting results:**  
+
+You can access registers directly from the snapshot data.  
+```py
+  r3_result = machine.get_register(3) # r3
+  z, c, o = machine.flgs # ALU flags
+```
+
 ## Downsides
 
 **It's slow!**  
