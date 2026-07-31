@@ -61,6 +61,9 @@ You can access registers directly from the snapshot data.
   z, c, o = machine.flgs # ALU flags
 ```
 
+<img width="1004" height="392" alt="testing" src="https://github.com/user-attachments/assets/57c05df4-3762-43e7-bde9-ba844452f036" />
+
+
 ## Downsides
 
 **It's slow!**  
