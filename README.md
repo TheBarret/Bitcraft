@@ -27,7 +27,7 @@ def test_ALU_operations():
         int(ALUOp.ADD)
     )
 
-    print(f"R2 = {cpu[2]} (expecting=58)")
+    print(f"R2 = {cpu[2]}")
     print(f"Flags: {cpu.flags}")
     print(f"Registers: {cpu.registers}")
 
