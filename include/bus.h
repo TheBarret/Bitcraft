@@ -23,7 +23,7 @@
      - added bus_load_program() function
  */
 
-#define MEMORY_SIZE 65536    // (256 × 16-bit words)
+#define MEMORY_SIZE 65536    // 16bit
 #define NUM_REGISTERS 8      // R0-R7 occupy addresses 0-7
 #define PROGRAM_START 512    // General RAM
 
