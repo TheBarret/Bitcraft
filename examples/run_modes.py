@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-    Run Modes Examples
+    Examples
 """
 import ctypes # for cpu._machine.lib.* functions
 
-from machine import CPU, ALUOp, SysSubtype, Mode
+from machine import CPU, ALUOp, SysExt, Mode
 
 def test_ALU_operations():
     cpu = CPU()
