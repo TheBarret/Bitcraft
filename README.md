@@ -1,4 +1,4 @@
-# Bitcraft
+# Bitcraft (Slow project)
 
 A Python-Controlled Gate-Level Arithmetic Engine  
 
@@ -6,63 +6,32 @@ A Python-Controlled Gate-Level Arithmetic Engine
 A Python library that exposes a complete 16-bit CPU data paths (ALU, memory, bus) implemented in C,  
 but controlled entirely from Python.   
 
-## Working parts
-
-**Binding interface:**  
-
-This library will provide the communication between Python and C-runtime.  
+## Working parts & bits
 ```py
-  from binding import Machine
+import ctypes # for cpu._machine.lib.* functions
+
+from machine import CPU, ALUOp, SysExt, Mode
+
+def test_ALU_operations():
+    cpu = CPU()
+
+    # Pythonic memory access
+    cpu[0] = 42    # R0 = 42
+    cpu[1] = 16    # R1 = 16
+
+    # Direct-access ALU operation via the C library
+    # ADD: r2 = r0 + r1
+    cpu._machine.lib.machine_alu_op(
+        ctypes.byref(cpu._machine.state),
+        0, 1, 2,
+        int(ALUOp.ADD)
+    )
+
+    print(f"R2 = {cpu[2]} (expecting=58)")
+    print(f"Flags: {cpu.flags}")
+    print(f"Registers: {cpu.registers}")
+
 ```
-
-**Loading the module:**  
-
-Loading the library (always reset/re-initialize for clearing old/unpredictable memory).  
-```py
-  def run():
-      try:
-          machine = Machine()
-          machine.reset()
-      except FileNotFoundError as e:
-          print(f"error: {e}")
-          sys.exit(1)
-```
-
-**Run a basic sum:**  
-
-The sum `42 + 16`, prepare three registers `r3 = r1 + r2  (0x002A + 0x0010 = 0x003A / 58 [decimal])`  
-
-
-```py
-  program = [
-          0x0312,  # R3 = R1 + R2
-          0xF000   # Halt placeholder for now *todo*
-      ]
-  
-  machine.set_register(1, 42)
-  machine.set_register(2, 16)
-```
-
-**Commit:**  
-
-We load the byte array into the bus, and invoke the `run()`.  
-
-```py
-  load_success = machine.load_program(program)
-  if load_success:
-    cycles = machine.run(max_cycles=5)
-```
-
-**Inspecting results:**  
-
-You can access registers directly from the snapshot data.  
-```py
-  r3_result = machine.get_register(3) # r3
-  z, c, o = machine.flgs # ALU flags
-```
-
-<img width="1004" height="392" alt="testing" src="https://github.com/user-attachments/assets/57c05df4-3762-43e7-bde9-ba844452f036" />
-
 
 ## Downsides
 
