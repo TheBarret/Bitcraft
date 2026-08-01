@@ -3,8 +3,6 @@ import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# --- Python-Side Structural Mirrors (Must match C header layouts exactly) ---
-
 class Bit(ctypes.Structure):
     _fields_ = [("v", ctypes.c_ubyte)]
 
@@ -15,7 +13,6 @@ class AluFlags(ctypes.Structure):
         ("overflow", Bit),
     ]
 
-# This must be aligned with bus.h (MEMORY_SIZE)
 MEMORY_SIZE = 65536
 NUM_REGISTERS = 8
 
@@ -41,76 +38,53 @@ class _MachineState(ctypes.Structure):
         ("signed_mode", ctypes.c_ubyte),
     ]
 
-# --- Python Wrapper Class ---
-
 class Machine:
     def __init__(self, lib_path: Optional[str] = None):
         if lib_path is None:
-            # Default to look in ./build/bc.so relative to this script
             lib_path = str(Path(__file__).parent / "build" / "bc.so")
-
         if not os.path.exists(lib_path):
             raise FileNotFoundError(f"Could not find library at {lib_path}.")
 
         self.lib = ctypes.CDLL(lib_path)
         self._setup_signatures()
-
         self.state = _MachineState()
         self.init()
 
     def _setup_signatures(self):
-        """Configure argtypes and restype for robust type safety across the C boundary."""
         self.lib.machine_init.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_init.restype = None
-
         self.lib.machine_reset.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_reset.restype = None
-
         self.lib.machine_load_program.argtypes = [ctypes.POINTER(_MachineState), ctypes.POINTER(ctypes.c_uint16), ctypes.c_size_t]
         self.lib.machine_load_program.restype = ctypes.c_int
-
         self.lib.machine_step.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_step.restype = ctypes.c_int
-
         self.lib.machine_run.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_uint64]
         self.lib.machine_run.restype = ctypes.c_uint64
-
         self.lib.machine_halt.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_halt.restype = None
-
         self.lib.machine_alu_op.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint16, ctypes.c_int]
         self.lib.machine_alu_op.restype = ctypes.c_int
-
         self.lib.machine_write.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_uint16, ctypes.c_uint16]
         self.lib.machine_write.restype = ctypes.c_int
-
         self.lib.machine_read.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_uint16]
         self.lib.machine_read.restype = ctypes.c_uint16
-
         self.lib.machine_get_register.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_ubyte]
         self.lib.machine_get_register.restype = ctypes.c_uint16
-
         self.lib.machine_set_register.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_ubyte, ctypes.c_uint16]
         self.lib.machine_set_register.restype = ctypes.c_int
-
         self.lib.machine_get_zero_flag.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_get_zero_flag.restype = ctypes.c_ubyte
-
         self.lib.machine_get_carry_flag.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_get_carry_flag.restype = ctypes.c_ubyte
-
         self.lib.machine_get_overflow_flag.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_get_overflow_flag.restype = ctypes.c_ubyte
-
         self.lib.machine_get_wire.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_ubyte]
         self.lib.machine_get_wire.restype = ctypes.c_ubyte
-
         self.lib.machine_set_mode.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_int]
         self.lib.machine_set_mode.restype = None
-
         self.lib.machine_get_mode.argtypes = [ctypes.POINTER(_MachineState)]
         self.lib.machine_get_mode.restype = ctypes.c_int
-
         self.lib.machine_dump.argtypes = [ctypes.POINTER(_MachineState), ctypes.c_uint16, ctypes.c_uint16]
         self.lib.machine_dump.restype = None
 
@@ -121,8 +95,9 @@ class Machine:
         self.lib.machine_reset(ctypes.byref(self.state))
 
     def load_program(self, program: List[int]) -> int:
-        arr = (ctypes.c_uint16 * len(program))(*program)
-        return self.lib.machine_load_program(ctypes.byref(self.state), arr, len(program))
+        # SAFETY FIX: Keep a reference to prevent premature garbage collection
+        self._program_buffer = (ctypes.c_uint16 * len(program))(*program)
+        return self.lib.machine_load_program(ctypes.byref(self.state), self._program_buffer, len(program))
 
     def step(self) -> int:
         return self.lib.machine_step(ctypes.byref(self.state))

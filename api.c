@@ -165,7 +165,7 @@ void machine_set_mode(Machine* state, MachineMode mode) {
     if (!state) return;
     state->mode = mode;
 
-    /* Use SYS instruction to reconfigure ALU safely within valid RAM range */
+    /* TODO: Use SYS instruction to reconfigure ALU safely within valid RAM range
     bit control[4];
     op_to_control(ALU_OP_SYS_VAL, control);
 
@@ -175,6 +175,7 @@ void machine_set_mode(Machine* state, MachineMode mode) {
 
     bus_load_immediate(&state->bus, scratch_addr1, mode_val);
     bus_alu_op(&state->bus, scratch_addr1, scratch_addr2, scratch_addr2, control);
+    */
 }
 
 MachineMode machine_get_mode(const Machine* state) {
