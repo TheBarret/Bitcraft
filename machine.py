@@ -1,6 +1,26 @@
 """
     Machine Template
-    Basic CPU with full 16-bit bus addressing (via SYS LD16/ST16 extensions)
+    Basic CPU with full 16-bit bus addressing
+
+    changelog 0.1: initial release
+
+    changelog 0.2 added:
+    - HALT, Halt execution
+    - LD16, Load from 16-bit address
+    - ST16, Store to 16-bit address
+    - LDI16, Load 16-bit immediate
+    - JMP16, Jump to 16-bit address
+    - CALL16, Call subroutine at 16-bit address
+    - RET, Return from subroutine
+    - PUSH, Push to stack
+    - POP, Pop from stack
+
+    changelog 0.3 added:
+    - STIND, Store R[src1] to memory at address in R[dest] (store-indirect)
+    - LDIND, Load into R[dest] from memory at address in R[src1] (load-indirect)
+    - JZ, Jump to 16-bit address if zero flag is set
+    - JNZ, Jump to 16-bit address if zero flag is not set
+    - JC, Jump to 16-bit address if carry flag is set
 """
 
 import ctypes
@@ -41,6 +61,12 @@ class SysExt(IntEnum):
     RET = 0x6       # Return from subroutine
     PUSH = 0x7      # Push to stack
     POP = 0x8       # Pop from stack
+    STIND = 0x9 # Store R[src1] to memory at address in R[dest] (store-indirect)
+    LDIND = 0xA # Load into R[dest] from memory at address in R[src1] (load-indirect)
+    JZ    = 0xB # Jump to 16-bit address if zero flag is set
+    JNZ   = 0xC # Jump to 16-bit address if zero flag is not set
+    JC    = 0xD # Jump to 16-bit address if carry flag is set
+
 
 
 class Mode(IntEnum):
@@ -184,9 +210,9 @@ class CPU:
         return Instruction(opcode=opcode, dest=dest, src1=src1, src2=src2, is_extended=False, words=1)
 
     def _decode_extended(self, subtype: int, src1: int, src2: int) -> Instruction:
-        instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2, subtype=subtype, is_extended=True, words=2)
+        instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2,
+                            subtype=subtype, is_extended=True, words=2)
 
-        # wrap PC + 1 to prevent out-of-bounds read at 0xFFFF
         second_word = self._machine.read_mem((self.pc + 1) & 0xFFFF)
 
         if subtype == SysExt.LD16:
@@ -198,9 +224,17 @@ class CPU:
         elif subtype == SysExt.LDI16:
             instr.dest = src1
             instr.immediate = second_word
-        elif subtype in (SysExt.JMP16, SysExt.CALL16):
+        elif subtype in (SysExt.JMP16, SysExt.CALL16,
+                         SysExt.JZ, SysExt.JNZ, SysExt.JC):  # <-- add conditional jumps
             instr.address = second_word
-            instr.words = 2
+        elif subtype in (SysExt.STIND, SysExt.LDIND):         # <-- indirect ops: 1 word
+            instr.words = 1
+            if subtype == SysExt.STIND:
+                instr.src1 = src1   # value register
+                instr.dest = src2   # address register
+            else:  # LDIND
+                instr.dest = src1   # destination register
+                instr.src1 = src2   # address register
         elif subtype in (SysExt.RET, SysExt.PUSH, SysExt.POP, SysExt.HALT):
             instr.src1 = src1 if subtype in (SysExt.PUSH, SysExt.POP) else 0
             instr.words = 1
@@ -236,6 +270,28 @@ class CPU:
             self._call_stack.append((self.pc + 2) & 0xFFFF)
             self.pc = instr.address
             self._branch_taken = True
+        # --- new ---
+        elif subtype == SysExt.STIND:
+            value = self._machine.get_register(instr.src1)
+            addr = self._machine.get_register(instr.dest)
+            self._machine.write_mem(addr, value)
+        elif subtype == SysExt.LDIND:
+            addr = self._machine.get_register(instr.src1)
+            value = self._machine.read_mem(addr)
+            self._machine.set_register(instr.dest, value)
+        elif subtype == SysExt.JZ:
+            if self.zero:
+                self.pc = instr.address
+                self._branch_taken = True
+        elif subtype == SysExt.JNZ:
+            if not self.zero:
+                self.pc = instr.address
+                self._branch_taken = True
+        elif subtype == SysExt.JC:
+            if self.carry:
+                self.pc = instr.address
+                self._branch_taken = True
+        # --- end new ---
         elif subtype == SysExt.RET:
             if not self._call_stack:
                 raise RuntimeError("RET executed on empty call stack")
@@ -344,6 +400,13 @@ class CPU:
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4)]
             elif op == "RET" and len(args) == 0:
                 return [(ALUOp.SYS << 12) | (subtype << 8)]
+            elif op in ("JZ", "JNZ", "JC") and len(args) == 1:
+                addr = args[0]
+                return [(ALUOp.SYS << 12) | (subtype << 8), addr & 0xFFFF]
+            elif op in ("STIND", "LDIND") and len(args) == 2:
+                r1, r2 = args
+                return [(ALUOp.SYS << 12) | (subtype << 8) | (r1 << 4) | r2]
+
         raise ValueError(f"Unknown instruction: {op} {args}")
 
     def assemble_program(self, instructions: List[tuple]) -> List[int]:
