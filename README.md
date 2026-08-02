@@ -63,7 +63,11 @@ but controlled entirely from Python.
 | **PUSH** | Python (Extended) | `src1` (1 word) | Pushes a register value onto the Python-managed software stack. |
 | **POP** | Python (Extended) | `src1` (1 word) | Pops a value from the software stack into a register. |
 | **HALT** | Python (Extended) | *None* (1 word) | Signals the Python CPU execution loop to terminate. |
-
+| **STIND** | Python (Extended) | *Indirect memory access* | Store R[src1] to memory at address in R[dest] |
+| **LDIND** | Python (Extended) | *Indirect memory access* | Load into R[dest] from memory at address in R[src1] |
+| **JZ** | Python (Extended) | *Branch* | Jump to 16-bit address if zero flag is set |
+| **JNZ** | Python (Extended) | *Branch* | Jump to 16-bit address if zero flag is not set |
+| **JC** | Python (Extended) | *Branch* | Jump to 16-bit address if carry flag is set |
 
 ## Working parts & bits
 ```py
