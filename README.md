@@ -119,16 +119,14 @@ def hello_world():
     # R3 = increment constant (value 1)
     # R6 = zero constant (for CMP against null terminator)
 
-
-    # Load string data into memory using
-    # CPU.load_string(addr: int, text: str, null_terminate: bool) -> int:
-    cpu.load_string(STRING_ADDR, "Hello, World!\n")
-
-
     # Allocation & Configuration
     PROGRAM_BASE = 0x0200
     STRING_ADDR  = 0x4000       # string address
     OUTPUT_PORT  = 0xFFFE       # Memory-mapped output (stdout port)
+
+    # Load string data into memory using
+    # CPU.load_string(addr: int, text: str, null_terminate: bool) -> int:
+    cpu.load_string(STRING_ADDR, "Hello, World!\n")
 
     init = cpu.assemble_program([
         ("LDI16", 0, STRING_ADDR),    # R0 = string pointer
