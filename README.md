@@ -76,9 +76,9 @@ Format: `[15:12]=opcode, [11:8]=dest, [7:4]=src1, [3:0]=src2`*
 
 *Note: STDIO ports are only accessible via indirect operations (`STIND`/`LDIND`) or direct Python `cpu[addr]` access. Direct `ST16`/`LD16` bypass STDIO interception.*
 
+## Runs the Essentials
 
-
-## Working parts & bits
+*Example of a sum `r2 = 42 + 16`:*  
 ```py
 import ctypes # for cpu._machine.lib.* functions
 
