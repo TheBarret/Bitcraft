@@ -6,68 +6,77 @@ A Python-Controlled Gate-Level Arithmetic Engine
 A Python library that exposes a complete 16-bit CPU data paths (ALU, memory, bus) implemented in C,  
 but controlled entirely from Python.   
 
-# Current CPU Template Model (Testing Phase)
+# Opcode scheme (Cheat Sheet)
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│ MACHINE.PY                                                        │
-│                                                                   │
-│  ┌───────────────────┐  ┌───────────────────┐  ┌───────────────┐  │
-│  │    CPU Class      │  │ Instruction       │  │ Program       │  │
-│  │ (PC, SP, Decoder) ├─►│   Decoder         ├─►│ Counter (PC)  │  │
-│  └───────────────────┘  └───────────────────┘  └───────────────┘  │
-│            │                                           │          │
-│            └───────────────────┬───────────────────────┘          │
-│                                │                                  │
-└─────────────────────────[Python Instance]─────────────────────────┘
-│                                v                                  │
-│                       ctypes FFI [Binding.py]                     │
-│                                v^                                 │
-┌───────────────────────────────API.C───────────────────────────────┐
-│                                v^                                 │
-│                        (Memory & Bus IO)                          │
-│                        ┌───────v───────┐                          │
-│                        │    ALU        │                          │
-│                        │  (C-Runtime)  │                          │
-│                        └───────────────┘                          │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  Registers (R0-R7) & 64K Unified Memory Space               │  │
-│  ├─────────────────────────────────────────────────────────────┤  │
-│  │  16-Bit Bus Data Path (Read / Write / Load)                 │  │
-│  ├─────────────────────────────────────────────────────────────┤  │
-│  │  ALU Execution Units (ADD, SUB, AND, OR, XOR, SHL, etc.)    │  │
-│  ├─────────────────────────────────────────────────────────────┤  │
-│  │  Flags Unit (Zero, Carry, Overflow)                         │  │
-│  ├─────────────────────────────────────────────────────────────┤  │
-│  │  SYS Hatch / Mode Switcher                                  │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────────┘
+### C-Runtime Operations (ALU & Logic)
+*All 1-word instructions. Executed directly in C.  
+Format: `[15:12]=opcode, [11:8]=dest, [7:4]=src1, [3:0]=src2`*
 
-```
+| Mnemonic | Parameters | Description | Notes |
+|---|---|---|---|
+| **ADD** | `dest, src1, src2` | `dest = src1 + src2` | Updates Z, C, O flags |
+| **SUB** | `dest, src1, src2` | `dest = src1 - src2` | Updates Z, C, O flags |
+| **CMP** | `dest, src1, src2` | `dest = src1 - src2` (result discarded) | Updates Z, C, O flags only |
+| **AND** | `dest, src1, src2` | `dest = src1 & src2` | Updates Z flag |
+| **OR** | `dest, src1, src2` | `dest = src1 \| src2` | Updates Z flag |
+| **XOR** | `dest, src1, src2` | `dest = src1 ^ src2` | Updates Z flag |
+| **NAND** | `dest, src1, src2` | `dest = ~(src1 & src2)` | Updates Z flag |
+| **NOR** | `dest, src1, src2` | `dest = ~(src1 \| src2)` | Updates Z flag |
+| **NOT_A** | `dest, src1, src2` | `dest = ~src1` | src2 ignored; updates Z flag |
+| **PASS_A** | `dest, src1, src2` | `dest = src1` | src2 ignored |
+| **PASS_B** | `dest, src1, src2` | `dest = src2` | src1 ignored |
+| **SHL** | `dest, src1, src2` | `dest = src1 << src2` | Updates Z flag |
+| **SHR** | `dest, src1, src2` | `dest = src1 >> src2` (logical) | Updates Z flag |
+| **ROL** | `dest, src1, src2` | `dest = src1 rotate-left src2` | Updates Z flag |
+| **ROR** | `dest, src1, src2` | `dest = src1 rotate-right src2` | Updates Z flag |
 
-# Opcode scheme
+### Python Extended Operations (SYS Subtypes)
+*All use opcode `0xF` (SYS). Format: `[15:12]=0xF, [11:8]=subtype, [7:4]=src1, [3:0]=src2`*
 
-| Opcode / Mnemonic | Group | Parameters / Encoding | Description |
-| --- | --- | --- | --- |
-| **ADD**, **SUB**, **CMP** | C-Runtime | `dest, src1, src2` (3 operands) | Core arithmetic operations; updates ALU flags (Z, C, O). |
-| **AND**, **OR**, **XOR**, **NAND**, **NOR**, **NOT_A** | C-Runtime | `dest, src1, src2` (or `src1` for NOT) | Bitwise logic execution units. |
-| **PASS_A**, **PASS_B** | C-Runtime | `dest, src1, src2` | Pass-through operations to route register values through the ALU. |
-| **SHL**, **SHR**, **ROL**, **ROR** | C-Runtime | `dest, src1, src2` | Bit shift and rotation operations. |
-| **SYS** (Base) | C-Runtime / Python Escape | `subtype, src1, src2` | Control hatch opcode used to trigger Python-managed extended instruction subtypes. |
-| **LD16** | Python (Extended) | `dest, address` (2 words) | Loads a 16-bit word from any absolute address (0–65535) into a register. |
-| **ST16** | Python (Extended) | `address, src1` (2 words) | Stores a register's value into a 16-bit absolute memory address. |
-| **LDI16** | Python (Extended) | `dest, immediate` (2 words) | Loads a 16-bit immediate constant value directly into a register. |
-| **JMP16** | Python (Extended) | `address` (2 words) | Unconditional jump, updates the Python-managed Program Counter (PC). |
-| **CALL16** | Python (Extended) | `address` (2 words) | Calls a subroutine, pushing the return address onto the Python call stack. |
-| **RET** | Python (Extended) | *None* (1 word) | Returns from a subroutine by popping the return address into the PC. |
-| **PUSH** | Python (Extended) | `src1` (1 word) | Pushes a register value onto the Python-managed software stack. |
-| **POP** | Python (Extended) | `src1` (1 word) | Pops a value from the software stack into a register. |
-| **HALT** | Python (Extended) | *None* (1 word) | Signals the Python CPU execution loop to terminate. |
-| **STIND** | Python (Extended) | *Indirect memory access* | Store R[src1] to memory at address in R[dest] |
-| **LDIND** | Python (Extended) | *Indirect memory access* | Load into R[dest] from memory at address in R[src1] |
-| **JZ** | Python (Extended) | *Branch* | Jump to 16-bit address if zero flag is set |
-| **JNZ** | Python (Extended) | *Branch* | Jump to 16-bit address if zero flag is not set |
-| **JC** | Python (Extended) | *Branch* | Jump to 16-bit address if carry flag is set |
+#### Memory Access
+| Mnemonic | Subtype | Words | Parameters | Description | Notes |
+|---|---|---|---|---|---|
+| **LD16** | `0x1` | 2 | `dest, address` | `R[dest] = mem[address]` | address is 16-bit immediate in word 2 |
+| **ST16** | `0x2` | 2 | `address, src1` | `mem[address] = R[src1]` | Bypasses STDIO ports |
+| **LDI16** | `0x3` | 2 | `dest, immediate` | `R[dest] = immediate` | immediate is 16-bit in word 2 |
+| **STIND** | `0x9` | 1 | `src1, dest` | `mem[R[dest]] = R[src1]` | Routes through STDIO at 0xFFFE |
+| **LDIND** | `0xA` | 1 | `dest, src1` | `R[dest] = mem[R[src1]]` | Routes through STDIO at 0xFFFD |
+
+#### Control Flow
+| Mnemonic | Subtype | Words | Parameters | Description | Notes |
+|---|---|---|---|---|---|
+| **JMP16** | `0x4` | 2 | `address` | `PC = address` | Unconditional jump |
+| **CALL16** | `0x5` | 2 | `address` | Push `(PC+2)`, then `PC = address` | Raises `CallStackOverflowError` if depth > 256 |
+| **RET** | `0x6` | 1 | *None* | `PC = pop()` | Raises `CallStackUnderflowError` if stack empty |
+| **JZ** | `0xB` | 2 | `address` | `if (Z) PC = address` | Jump if zero flag set |
+| **JNZ** | `0xC` | 2 | `address` | `if (!Z) PC = address` | Jump if zero flag not set |
+| **JC** | `0xD` | 2 | `address` | `if (C) PC = address` | Jump if carry flag set |
+
+#### Stack Operations
+| Mnemonic | Subtype | Words | Parameters | Description | Notes |
+|---|---|---|---|---|---|
+| **PUSH** | `0x7` | 1 | `src1` | `SP--; mem[SP] = R[src1]` | Raises `StackOverflowError` if SP ≤ 0x1000 |
+| **POP** | `0x8` | 1 | `src1` | `R[src1] = mem[SP]; SP++` | Raises `StackUnderflowError` if SP = 0xFF00 |
+
+#### System Control
+| Mnemonic | Subtype | Words | Parameters | Description | Notes |
+|---|---|---|---|---|---|
+| **HALT** | `0x0` | 1 | *None* | Stop execution | Sets `halted` flag |
+
+### Reserved Subtypes
+| Subtype | Status |
+|---|---|
+| `0xE`, `0xF` | Reserved; raises `InvalidInstructionError` if decoded |
+
+### STDIO Memory-Mapped Ports
+| Address | Direction | Description |
+|---|---|---|
+| `0xFFFD` | Input | Read returns character from stdin (blocking, line-buffered) |
+| `0xFFFE` | Output | Write prints character to stdout |
+
+*Note: STDIO ports are only accessible via indirect operations (`STIND`/`LDIND`) or direct Python `cpu[addr]` access. Direct `ST16`/`LD16` bypass STDIO interception.*
+
+
 
 ## Working parts & bits
 ```py
