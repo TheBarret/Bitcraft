@@ -25,6 +25,8 @@ changelog 0.6: added opcodes:
     - XCHG (Exchange registers)
     - SWAP (Swap bytes within a register)
 
+changelog 0.7: added load_string(addr: int, text: str, null_terminate: bool), QoL function.
+
 Known Issues:
     - Direct access (ST16, LD16): Bypasses STDIO interception, writes/reads raw memory.
     - Indirect access (STIND, LDIND): Routes through __setitem__/__getitem__, triggers STDIO at 0xFFFD/0xFFFE.
@@ -467,6 +469,22 @@ class CPU:
         self._check_reg(reg)
         self._check_u16(value, "register value")
         self._machine.set_register(reg, value)
+
+    def load_string(self, addr: int, text: str, null_terminate: bool = True) -> int:
+        """
+        Load a string into memory starting at address
+        Returns the number of bytes written (including null terminator if enabled).
+        """
+        bytes_written = 0
+        for i, char in enumerate(text):
+            self[addr + i] = ord(char) & 0xFF  # 8-bit char in 16-bit word
+            bytes_written += 1
+
+        if null_terminate:
+            self[addr + bytes_written] = 0
+            bytes_written += 1
+
+        return bytes_written
 
     # Properties
     @property
