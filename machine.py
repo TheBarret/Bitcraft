@@ -5,6 +5,7 @@ Basic CPU with full 16-bit bus addressing
 changelog 0.1: initial release
 changelog 0.2: added extended operations (HALT, LD16, ST16, LDI16, JMP16, CALL16, RET, PUSH, POP)
 changelog 0.3: added indirect addressing (STIND, LDIND) and conditional jumps (JZ, JNZ, JC)
+changelog 0.4: added stdio ports, input=0xFFFD, output=0xFFFE, caught before memory __setitem__, __getitem__
 """
 
 import ctypes
@@ -171,6 +172,7 @@ class CPU:
         self._branch_taken = False
 
         # Cycle count; 1-word or 2-word instructions
+        # Todo: Check cycle counting, for inaccuracy
         self._machine.state.cycle_count += decoded.words
 
         return True
@@ -198,6 +200,7 @@ class CPU:
         src1 = (word >> 4) & 0x0F
         src2 = word & 0x0F
 
+        # Todo: Validate opcode and subtype ranges, raise InvalidInstructionError for invalid values
         if opcode == ALUOp.SYS:
             subtype = dest
             extended = self._decode_extended(subtype, src1, src2)
@@ -280,11 +283,14 @@ class CPU:
             self._branch_taken = True
         elif subtype == SysExt.CALL16:
             # Push return address (current PC + 2) then jump
+            # Todo: Call Stack Can Overflow/Underflow Silently
             self._call_stack.append((self.pc + 2) & 0xFFFF)
             self.pc = instr.address
             self._branch_taken = True
+            # Todo:
         elif subtype == SysExt.STIND:
             # Indirect store: R[src1] -> memory[R[dest]]
+            # Todo: Bounds Checking on Indirect Memory Access
             value = self._machine.get_register(instr.src1)
             addr = self._machine.get_register(instr.dest)
             self._machine.write_mem(addr, value)
@@ -295,6 +301,7 @@ class CPU:
             self._machine.set_register(instr.dest, value)
         elif subtype == SysExt.JZ:
             # Jump if zero flag set
+            # Todo: Branch Target Validation
             if self.zero:
                 self.pc = instr.address
                 self._branch_taken = True
@@ -310,12 +317,14 @@ class CPU:
                 self._branch_taken = True
         elif subtype == SysExt.RET:
             # Pop return address and jump
+            # Todo: Prevent recursive runaways, add a max call depth (e.g., 256) and raise an error if n>max
             if not self._call_stack:
                 raise RuntimeError("RET executed on empty call stack")
             self.pc = self._call_stack.pop()
             self._branch_taken = True
         elif subtype == SysExt.PUSH:
             # Decrement SP, then store
+            # Todo: Bounds Checking (auto wrap could overwrite low memory)
             value = self._machine.get_register(instr.src1)
             self._stack_pointer = (self._stack_pointer - 1) & 0xFFFF
             self._machine.write_mem(self._stack_pointer, value)
@@ -332,6 +341,8 @@ class CPU:
         """Memory read with bounds checking"""
         if not (0 <= addr < self.MEMORY_SIZE):
             raise IndexError(f"Address {addr} out of range")
+        if addr == 0xFFFD:  # Std input port
+                return ord(input()[:1])  # blocking read
         return self._machine.read_mem(addr)
 
     def __setitem__(self, addr: int, value: int) -> None:
@@ -340,7 +351,10 @@ class CPU:
             raise IndexError(f"Address {addr} out of range")
         if not (0 <= value <= 0xFFFF):
             raise ValueError(f"Value {value} out of 16-bit range")
-        self._machine.write_mem(addr, value)
+        if addr == 0xFFFE:  # Std output port
+            print(chr(value & 0xFF), end='', flush=True)
+        else:
+            self._machine.write_mem(addr, value)
 
     def get_reg(self, reg: int) -> int:
         """Get register value"""
@@ -399,6 +413,7 @@ class CPU:
         self._stack_pointer = value & 0xFFFF
 
     # ---- Assembler Helper ----
+    # Todo: Validate Register Numbers
     def assemble(self, op: str, *args) -> List[int]:
         """
         Assemble a single instruction into 16-bit words.
