@@ -6,6 +6,29 @@ changelog 0.1: initial release
 changelog 0.2: added extended operations (HALT, LD16, ST16, LDI16, JMP16, CALL16, RET, PUSH, POP)
 changelog 0.3: added indirect addressing (STIND, LDIND) and conditional jumps (JZ, JNZ, JC)
 changelog 0.4: added stdio ports, input=0xFFFD, output=0xFFFE, caught before memory __setitem__, __getitem__
+changelog 0.5: patch list:
+    - opcode/subtype validation (InvalidInstructionError, raised at decode time not execute time)
+    - register index validation on all decode paths + assemble() (InvalidRegisterError)
+    - call stack depth cap on CALL16 (CallStackOverflowError), RET underflow now a typed error
+    - bounds-checked PUSH/POP stack (StackOverflowError/StackUnderflowError) instead of silent 0xFFFF wrap
+    - STIND/LDIND now route through __getitem__/__setitem__ so STDIO ports (0xFFFD/0xFFFE) and
+      memory bounds checks apply to indirect access too, matching direct access behavior
+    - assemble() now gives explicit arg-count/range errors instead of falling through
+changelog 0.6: added opcodes:
+    - JNC (Jump if No Carry)
+    - JO / JNO (Jump if Overflow / No Overflow)
+    - NOP (No Operation)
+    - INC / DEC (Increment / Decrement)
+    - NEG (Negate)
+    - TEST (Bitwise AND without storing, just sets flags)
+    - BIT / SET / CLR (Test/Set/Clear specific bits)
+    - XCHG (Exchange registers)
+    - SWAP (Swap bytes within a register)
+
+Known Issues:
+    - Direct access (ST16, LD16): Bypasses STDIO interception, writes/reads raw memory.
+    - Indirect access (STIND, LDIND): Routes through __setitem__/__getitem__, triggers STDIO at 0xFFFD/0xFFFE.
+    - SysExt `0xE, 0xF` are unused, will raise `InvalidInstructionError` if decoded.
 """
 
 import ctypes
@@ -51,6 +74,7 @@ class SysExt(IntEnum):
     JZ    = 0xB     # Jump to 16-bit address if zero flag is set
     JNZ   = 0xC     # Jump to 16-bit address if zero flag is not set
     JC    = 0xD     # Jump to 16-bit address if carry flag is set
+    # 0xE, 0xF unused
 
 
 class Mode(IntEnum):
@@ -60,6 +84,35 @@ class Mode(IntEnum):
     SIGNED = 2
     ROUND = 3
     POLARITY_INVERT = 4
+
+
+# Typed errors
+class MachineError(Exception):
+    """Base class for all CPU-level runtime errors"""
+
+
+class InvalidInstructionError(MachineError):
+    """Raised when a decoded opcode/subtype is not a recognized instruction"""
+
+
+class InvalidRegisterError(MachineError):
+    """Raised when an instruction references a register index outside 0-7"""
+
+
+class CallStackOverflowError(MachineError):
+    """Raised when CALL16 nesting exceeds CPU.MAX_CALL_DEPTH"""
+
+
+class CallStackUnderflowError(MachineError, RuntimeError):
+    """Raised when RET is executed with no matching CALL16 (kept RuntimeError-compatible)"""
+
+
+class StackOverflowError(MachineError):
+    """Raised when PUSH would drive the stack pointer below the reserved low boundary"""
+
+
+class StackUnderflowError(MachineError):
+    """Raised when POP is executed with nothing pushed (SP already at STACK_BASE)"""
 
 
 @dataclass
@@ -113,6 +166,15 @@ class CPU:
     NUM_REGISTERS = 8
     PROGRAM_START = 0x0200
     STACK_BASE = 0xFF00
+
+    # Reserved low boundary the stack may not cross,
+    # prevents PUSH from wrapping 0x0000 -> 0xFFFF
+    # Adjust upward if your programs/data live higher in memory.
+    STACK_LIMIT_LOW = 0x1000
+
+    # Max nested CALL16 depth before we treat it as a runaway/bug rather than
+    # quietly growing an unbounded Python list.
+    MAX_CALL_DEPTH = 256
 
     def __init__(self, lib_path: Optional[str] = None):
         self._machine = Machine(lib_path)
@@ -172,7 +234,6 @@ class CPU:
         self._branch_taken = False
 
         # Cycle count; 1-word or 2-word instructions
-        # Todo: Check cycle counting, for inaccuracy
         self._machine.state.cycle_count += decoded.words
 
         return True
@@ -189,6 +250,22 @@ class CPU:
         """Stop execution"""
         self._machine.halt()
 
+    # Validation helpers
+    def _check_reg(self, idx: int, label: str = "register") -> int:
+        """Validate a decoded/assembled register index is within 0-NUM_REGISTERS-1"""
+        if not (0 <= idx < self.NUM_REGISTERS):
+            raise InvalidRegisterError(
+                f"Invalid {label} index {idx} (0x{idx:X}): must be 0-{self.NUM_REGISTERS - 1}"
+            )
+        return idx
+
+    @staticmethod
+    def _check_u16(value: int, label: str = "value") -> int:
+        """Validate an immediate/address fits in 16 bits"""
+        if not (0 <= value <= 0xFFFF):
+            raise ValueError(f"{label} {value} out of 16-bit range (0-65535)")
+        return value
+
     def _decode(self, word: int) -> Instruction:
         """
         Decode a 16-bit instruction word.
@@ -200,13 +277,17 @@ class CPU:
         src1 = (word >> 4) & 0x0F
         src2 = word & 0x0F
 
-        # Todo: Validate opcode and subtype ranges, raise InvalidInstructionError for invalid values
         if opcode == ALUOp.SYS:
             subtype = dest
             extended = self._decode_extended(subtype, src1, src2)
             extended.opcode = opcode
             extended.is_extended = True
             return extended
+
+        # ALU ops always reference real registers on all three fields (#1/#2)
+        self._check_reg(dest, "ALU dest")
+        self._check_reg(src1, "ALU src1")
+        self._check_reg(src2, "ALU src2")
 
         return Instruction(opcode=opcode, dest=dest, src1=src1, src2=src2, is_extended=False, words=1)
 
@@ -215,19 +296,24 @@ class CPU:
         Decode SYS extended instructions.
         Many SYS ops require a second 16-bit word (address or immediate).
         """
+        if subtype not in SysExt._value2member_map_:
+            raise InvalidInstructionError(
+                f"Unrecognized SYS subtype 0x{subtype:X} at PC=0x{self.pc:04X}"
+            )
+
         instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2,
                             subtype=subtype, is_extended=True, words=2)
 
         second_word = self._machine.read_mem((self.pc + 1) & 0xFFFF)
 
         if subtype == SysExt.LD16:
-            instr.dest = src1
+            instr.dest = self._check_reg(src1, "LD16 dest")
             instr.address = second_word
         elif subtype == SysExt.ST16:
             instr.address = second_word
-            instr.src1 = src1
+            instr.src1 = self._check_reg(src1, "ST16 src")
         elif subtype == SysExt.LDI16:
-            instr.dest = src1
+            instr.dest = self._check_reg(src1, "LDI16 dest")
             instr.immediate = second_word
         elif subtype in (SysExt.JMP16, SysExt.CALL16,
                          SysExt.JZ, SysExt.JNZ, SysExt.JC):
@@ -236,15 +322,16 @@ class CPU:
             # Indirect ops are 1 word: first nybble=src1, second=src2
             instr.words = 1
             if subtype == SysExt.STIND:
-                instr.src1 = src1   # value register
-                instr.dest = src2   # address register
+                instr.src1 = self._check_reg(src1, "STIND value reg")   # value register
+                instr.dest = self._check_reg(src2, "STIND addr reg")    # address register
             else:  # LDIND
-                instr.dest = src1   # destination register
-                instr.src1 = src2   # address register
-        elif subtype in (SysExt.RET, SysExt.PUSH, SysExt.POP, SysExt.HALT):
-            instr.src1 = src1 if subtype in (SysExt.PUSH, SysExt.POP) else 0
+                instr.dest = self._check_reg(src1, "LDIND dest reg")    # destination register
+                instr.src1 = self._check_reg(src2, "LDIND addr reg")    # address register
+        elif subtype in (SysExt.PUSH, SysExt.POP):
+            instr.src1 = self._check_reg(src1, f"{SysExt(subtype).name} reg")
             instr.words = 1
-        else:
+        elif subtype in (SysExt.RET, SysExt.HALT):
+            instr.src1 = 0
             instr.words = 1
 
         return instr
@@ -262,6 +349,7 @@ class CPU:
         Execute SYS extended instructions.
         This is the complex part - handles memory ops, branches, stack, and control flow.
         Each subtype has different operand requirements and side effects.
+        subtype validity is already guaranteed by _decode_extended.
         """
         subtype = SysExt(instr.subtype)
         if subtype == SysExt.HALT:
@@ -283,25 +371,28 @@ class CPU:
             self._branch_taken = True
         elif subtype == SysExt.CALL16:
             # Push return address (current PC + 2) then jump
-            # Todo: Call Stack Can Overflow/Underflow Silently
+            if len(self._call_stack) >= self.MAX_CALL_DEPTH:
+                raise CallStackOverflowError(
+                    f"CALL16 nesting exceeded MAX_CALL_DEPTH={self.MAX_CALL_DEPTH} "
+                    f"at PC=0x{self.pc:04X} -> target 0x{instr.address:04X}"
+                )
             self._call_stack.append((self.pc + 2) & 0xFFFF)
             self.pc = instr.address
             self._branch_taken = True
-            # Todo:
         elif subtype == SysExt.STIND:
             # Indirect store: R[src1] -> memory[R[dest]]
-            # Todo: Bounds Checking on Indirect Memory Access
+            # Routed through __setitem__ so STDIO output port (0xFFFE) and bounds
+            # checks apply the same way they do for direct ST16.
             value = self._machine.get_register(instr.src1)
             addr = self._machine.get_register(instr.dest)
-            self._machine.write_mem(addr, value)
+            self[addr] = value
         elif subtype == SysExt.LDIND:
             # Indirect load: memory[R[src1]] -> R[dest]
             addr = self._machine.get_register(instr.src1)
-            value = self._machine.read_mem(addr)
+            value = self[addr]
             self._machine.set_register(instr.dest, value)
         elif subtype == SysExt.JZ:
             # Jump if zero flag set
-            # Todo: Branch Target Validation
             if self.zero:
                 self.pc = instr.address
                 self._branch_taken = True
@@ -317,26 +408,36 @@ class CPU:
                 self._branch_taken = True
         elif subtype == SysExt.RET:
             # Pop return address and jump
-            # Todo: Prevent recursive runaways, add a max call depth (e.g., 256) and raise an error if n>max
             if not self._call_stack:
-                raise RuntimeError("RET executed on empty call stack")
+                raise CallStackUnderflowError(
+                    f"RET executed on empty call stack at PC=0x{self.pc:04X}"
+                )
             self.pc = self._call_stack.pop()
             self._branch_taken = True
         elif subtype == SysExt.PUSH:
-            # Decrement SP, then store
-            # Todo: Bounds Checking (auto wrap could overwrite low memory)
+            # Decrement SP, then store. Guarded against wrapping into low memory.
+            new_sp = (self._stack_pointer - 1) & 0xFFFF
+            if self._stack_pointer <= self.STACK_LIMIT_LOW:
+                raise StackOverflowError(
+                    f"PUSH would drive SP below STACK_LIMIT_LOW=0x{self.STACK_LIMIT_LOW:04X} "
+                    f"(current SP=0x{self._stack_pointer:04X}) at PC=0x{self.pc:04X}"
+                )
             value = self._machine.get_register(instr.src1)
-            self._stack_pointer = (self._stack_pointer - 1) & 0xFFFF
+            self._stack_pointer = new_sp
             self._machine.write_mem(self._stack_pointer, value)
         elif subtype == SysExt.POP:
-            # Load from SP, then increment
+            if self._stack_pointer >= self.STACK_BASE:
+                raise StackUnderflowError(
+                    f"POP with nothing pushed (SP=0x{self._stack_pointer:04X} == STACK_BASE) "
+                    f"at PC=0x{self.pc:04X}"
+                )
             value = self._machine.read_mem(self._stack_pointer)
             self._machine.set_register(instr.src1, value)
             self._stack_pointer = (self._stack_pointer + 1) & 0xFFFF
 
         self._instruction_history.append(instr)
 
-    # ---- Memory and Register Access ----
+    # Memory and Register Access
     def __getitem__(self, addr: int) -> int:
         """Memory read with bounds checking"""
         if not (0 <= addr < self.MEMORY_SIZE):
@@ -358,13 +459,16 @@ class CPU:
 
     def get_reg(self, reg: int) -> int:
         """Get register value"""
+        self._check_reg(reg)
         return self._machine.get_register(reg)
 
     def set_reg(self, reg: int, value: int) -> None:
         """Set register value"""
+        self._check_reg(reg)
+        self._check_u16(value, "register value")
         self._machine.set_register(reg, value)
 
-    # ---- Properties ----
+    # Properties
     @property
     def registers(self) -> List[int]:
         """Snapshot of all 8 registers"""
@@ -412,45 +516,73 @@ class CPU:
     def stack_pointer(self, value: int) -> None:
         self._stack_pointer = value & 0xFFFF
 
-    # ---- Assembler Helper ----
-    # Todo: Validate Register Numbers
+    # Assembler Helper
     def assemble(self, op: str, *args) -> List[int]:
         """
         Assemble a single instruction into 16-bit words.
         Returns a list of 1 or 2 words depending on instruction type.
+        Validates register indices (0-7) and immediate/address ranges.
         """
         op = op.upper()
         if op in ALUOp.__members__:
             opcode = ALUOp[op]
-            if len(args) == 3:
-                dest, src1, src2 = args
-                return [(opcode << 12) | (dest << 8) | (src1 << 4) | src2]
+            if len(args) != 3:
+                raise ValueError(f"{op} expects 3 register args (dest, src1, src2), got {len(args)}: {args}")
+            dest, src1, src2 = args
+            self._check_reg(dest, f"{op} dest")
+            self._check_reg(src1, f"{op} src1")
+            self._check_reg(src2, f"{op} src2")
+            return [(opcode << 12) | (dest << 8) | (src1 << 4) | src2]
+
         elif op in SysExt.__members__:
             subtype = SysExt[op]
-            if op == "LD16" and len(args) == 2:
+            if op == "LD16":
+                if len(args) != 2:
+                    raise ValueError(f"LD16 expects (dest, addr), got {len(args)}: {args}")
                 dest, addr = args
-                return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), addr & 0xFFFF]
-            elif op == "ST16" and len(args) == 2:
+                self._check_reg(dest, "LD16 dest")
+                self._check_u16(addr, "LD16 addr")
+                return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), addr]
+            elif op == "ST16":
+                if len(args) != 2:
+                    raise ValueError(f"ST16 expects (addr, src), got {len(args)}: {args}")
                 addr, src = args
-                return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4), addr & 0xFFFF]
-            elif op == "LDI16" and len(args) == 2:
+                self._check_u16(addr, "ST16 addr")
+                self._check_reg(src, "ST16 src")
+                return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4), addr]
+            elif op == "LDI16":
+                if len(args) != 2:
+                    raise ValueError(f"LDI16 expects (dest, imm), got {len(args)}: {args}")
                 dest, imm = args
-                return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), imm & 0xFFFF]
-            elif op in ("JMP16", "CALL16") and len(args) == 1:
+                self._check_reg(dest, "LDI16 dest")
+                self._check_u16(imm, "LDI16 imm")
+                return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), imm]
+            elif op in ("JMP16", "CALL16", "JZ", "JNZ", "JC"):
+                if len(args) != 1:
+                    raise ValueError(f"{op} expects (addr,), got {len(args)}: {args}")
                 addr = args[0]
-                return [(ALUOp.SYS << 12) | (subtype << 8), addr & 0xFFFF]
-            elif op == "HALT" and len(args) == 0:
+                self._check_u16(addr, f"{op} addr")
+                return [(ALUOp.SYS << 12) | (subtype << 8), addr]
+            elif op == "HALT":
+                if len(args) != 0:
+                    raise ValueError(f"HALT expects no args, got {len(args)}: {args}")
                 return [(ALUOp.SYS << 12) | (subtype << 8)]
-            elif op in ("PUSH", "POP") and len(args) == 1:
+            elif op in ("PUSH", "POP"):
+                if len(args) != 1:
+                    raise ValueError(f"{op} expects (reg,), got {len(args)}: {args}")
                 src = args[0]
+                self._check_reg(src, f"{op} reg")
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4)]
-            elif op == "RET" and len(args) == 0:
+            elif op == "RET":
+                if len(args) != 0:
+                    raise ValueError(f"RET expects no args, got {len(args)}: {args}")
                 return [(ALUOp.SYS << 12) | (subtype << 8)]
-            elif op in ("JZ", "JNZ", "JC") and len(args) == 1:
-                addr = args[0]
-                return [(ALUOp.SYS << 12) | (subtype << 8), addr & 0xFFFF]
-            elif op in ("STIND", "LDIND") and len(args) == 2:
+            elif op in ("STIND", "LDIND"):
+                if len(args) != 2:
+                    raise ValueError(f"{op} expects (reg1, reg2), got {len(args)}: {args}")
                 r1, r2 = args
+                self._check_reg(r1, f"{op} reg1")
+                self._check_reg(r2, f"{op} reg2")
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (r1 << 4) | r2]
 
         raise ValueError(f"Unknown instruction: {op} {args}")
@@ -462,7 +594,7 @@ class CPU:
             program.extend(self.assemble(*instr))
         return program
 
-    # ---- Debugging ----
+    # Debugging
     def dump(self, start: int = 0, end: int = 0x20) -> None:
         """Dump memory range and CPU state for debugging"""
         self._machine.dump(start, end)
