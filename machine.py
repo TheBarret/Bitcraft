@@ -1,26 +1,10 @@
 """
-    Machine Template
-    Basic CPU with full 16-bit bus addressing
+Machine Template
+Basic CPU with full 16-bit bus addressing
 
-    changelog 0.1: initial release
-
-    changelog 0.2 added:
-    - HALT, Halt execution
-    - LD16, Load from 16-bit address
-    - ST16, Store to 16-bit address
-    - LDI16, Load 16-bit immediate
-    - JMP16, Jump to 16-bit address
-    - CALL16, Call subroutine at 16-bit address
-    - RET, Return from subroutine
-    - PUSH, Push to stack
-    - POP, Pop from stack
-
-    changelog 0.3 added:
-    - STIND, Store R[src1] to memory at address in R[dest] (store-indirect)
-    - LDIND, Load into R[dest] from memory at address in R[src1] (load-indirect)
-    - JZ, Jump to 16-bit address if zero flag is set
-    - JNZ, Jump to 16-bit address if zero flag is not set
-    - JC, Jump to 16-bit address if carry flag is set
+changelog 0.1: initial release
+changelog 0.2: added extended operations (HALT, LD16, ST16, LDI16, JMP16, CALL16, RET, PUSH, POP)
+changelog 0.3: added indirect addressing (STIND, LDIND) and conditional jumps (JZ, JNZ, JC)
 """
 
 import ctypes
@@ -61,12 +45,11 @@ class SysExt(IntEnum):
     RET = 0x6       # Return from subroutine
     PUSH = 0x7      # Push to stack
     POP = 0x8       # Pop from stack
-    STIND = 0x9 # Store R[src1] to memory at address in R[dest] (store-indirect)
-    LDIND = 0xA # Load into R[dest] from memory at address in R[src1] (load-indirect)
-    JZ    = 0xB # Jump to 16-bit address if zero flag is set
-    JNZ   = 0xC # Jump to 16-bit address if zero flag is not set
-    JC    = 0xD # Jump to 16-bit address if carry flag is set
-
+    STIND = 0x9     # Store R[src1] to memory at address in R[dest] (store-indirect)
+    LDIND = 0xA     # Load into R[dest] from memory at address in R[src1] (load-indirect)
+    JZ    = 0xB     # Jump to 16-bit address if zero flag is set
+    JNZ   = 0xC     # Jump to 16-bit address if zero flag is not set
+    JC    = 0xD     # Jump to 16-bit address if carry flag is set
 
 
 class Mode(IntEnum):
@@ -134,8 +117,7 @@ class CPU:
         self._machine = Machine(lib_path)
         self._stack_pointer = self.STACK_BASE
         self._reset_state()
-
-        # Reference aliases
+        # Reference aliases for convenience
         self.ADD = ALUOp.ADD
         self.SUB = ALUOp.SUB
         self.AND = ALUOp.AND
@@ -146,16 +128,19 @@ class CPU:
         self.SYS = ALUOp.SYS
 
     def _reset_state(self) -> None:
+        """Reset Python-side state (stack, branch tracking, history)"""
         self._stack_pointer = self.STACK_BASE
         self._branch_taken = False
         self._call_stack: List[int] = []
         self._instruction_history: List[Instruction] = []
 
     def reset(self) -> None:
+        """Full system reset - C state + Python state"""
         self._machine.reset()
         self._reset_state()
 
     def load_program(self, program: List[int], start: int = PROGRAM_START) -> bool:
+        """Load a program into memory at the specified start address"""
         if start + len(program) > self.MEMORY_SIZE:
             raise ValueError("Program exceeds memory bounds")
         for i, word in enumerate(program):
@@ -164,6 +149,11 @@ class CPU:
         return True
 
     def step(self) -> bool:
+        """
+        Execute one instruction.
+        Returns False if halted, True otherwise.
+        Handles both 1-word ALU ops and 2-word SYS extended ops.
+        """
         if self.halted:
             return False
 
@@ -175,6 +165,7 @@ class CPU:
         else:
             self._execute_alu(decoded)
 
+        # Branch instructions set _branch_taken to avoid PC increment
         if not self._branch_taken:
             self.pc += decoded.words
         self._branch_taken = False
@@ -185,6 +176,7 @@ class CPU:
         return True
 
     def run(self, max_cycles: int = 1000) -> int:
+        """Run up to max_cycles instructions. Returns number executed."""
         start = self.cycles
         while (self.cycles - start) < max_cycles and not self.halted:
             if not self.step():
@@ -192,9 +184,15 @@ class CPU:
         return self.cycles - start
 
     def halt(self) -> None:
+        """Stop execution"""
         self._machine.halt()
 
     def _decode(self, word: int) -> Instruction:
+        """
+        Decode a 16-bit instruction word.
+        ALU ops: bits 15-12=op, 11-8=dest, 7-4=src1, 3-0=src2
+        SYS ops: bits 15-12=0xF, 11-8=subtype, 7-4=src1, 3-0=src2
+        """
         opcode = (word >> 12) & 0x0F
         dest = (word >> 8) & 0x0F
         src1 = (word >> 4) & 0x0F
@@ -210,6 +208,10 @@ class CPU:
         return Instruction(opcode=opcode, dest=dest, src1=src1, src2=src2, is_extended=False, words=1)
 
     def _decode_extended(self, subtype: int, src1: int, src2: int) -> Instruction:
+        """
+        Decode SYS extended instructions.
+        Many SYS ops require a second 16-bit word (address or immediate).
+        """
         instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2,
                             subtype=subtype, is_extended=True, words=2)
 
@@ -225,9 +227,10 @@ class CPU:
             instr.dest = src1
             instr.immediate = second_word
         elif subtype in (SysExt.JMP16, SysExt.CALL16,
-                         SysExt.JZ, SysExt.JNZ, SysExt.JC):  # <-- add conditional jumps
+                         SysExt.JZ, SysExt.JNZ, SysExt.JC):
             instr.address = second_word
-        elif subtype in (SysExt.STIND, SysExt.LDIND):         # <-- indirect ops: 1 word
+        elif subtype in (SysExt.STIND, SysExt.LDIND):
+            # Indirect ops are 1 word: first nybble=src1, second=src2
             instr.words = 1
             if subtype == SysExt.STIND:
                 instr.src1 = src1   # value register
@@ -244,6 +247,7 @@ class CPU:
         return instr
 
     def _execute_alu(self, instr: Instruction) -> None:
+        """Execute a standard ALU operation - simple, fast, direct C call"""
         self._machine.lib.machine_alu_op(
             ctypes.byref(self._machine.state),
             instr.src1, instr.src2, instr.dest, instr.opcode
@@ -251,69 +255,87 @@ class CPU:
         self._instruction_history.append(instr)
 
     def _execute_extended(self, instr: Instruction) -> None:
+        """
+        Execute SYS extended instructions.
+        This is the complex part - handles memory ops, branches, stack, and control flow.
+        Each subtype has different operand requirements and side effects.
+        """
         subtype = SysExt(instr.subtype)
-
         if subtype == SysExt.HALT:
             self.halt()
         elif subtype == SysExt.LD16:
+            # Load from absolute 16-bit address into register
             value = self._machine.read_mem(instr.address)
             self._machine.set_register(instr.dest, value)
         elif subtype == SysExt.ST16:
+            # Store register to absolute 16-bit address
             value = self._machine.get_register(instr.src1)
             self._machine.write_mem(instr.address, value)
         elif subtype == SysExt.LDI16:
+            # Load 16-bit immediate into register
             self._machine.set_register(instr.dest, instr.immediate)
         elif subtype == SysExt.JMP16:
+            # Unconditional jump - update PC and mark branch taken
             self.pc = instr.address
             self._branch_taken = True
         elif subtype == SysExt.CALL16:
+            # Push return address (current PC + 2) then jump
             self._call_stack.append((self.pc + 2) & 0xFFFF)
             self.pc = instr.address
             self._branch_taken = True
-        # --- new ---
         elif subtype == SysExt.STIND:
+            # Indirect store: R[src1] -> memory[R[dest]]
             value = self._machine.get_register(instr.src1)
             addr = self._machine.get_register(instr.dest)
             self._machine.write_mem(addr, value)
         elif subtype == SysExt.LDIND:
+            # Indirect load: memory[R[src1]] -> R[dest]
             addr = self._machine.get_register(instr.src1)
             value = self._machine.read_mem(addr)
             self._machine.set_register(instr.dest, value)
         elif subtype == SysExt.JZ:
+            # Jump if zero flag set
             if self.zero:
                 self.pc = instr.address
                 self._branch_taken = True
         elif subtype == SysExt.JNZ:
+            # Jump if zero flag not set
             if not self.zero:
                 self.pc = instr.address
                 self._branch_taken = True
         elif subtype == SysExt.JC:
+            # Jump if carry flag set
             if self.carry:
                 self.pc = instr.address
                 self._branch_taken = True
-        # --- end new ---
         elif subtype == SysExt.RET:
+            # Pop return address and jump
             if not self._call_stack:
                 raise RuntimeError("RET executed on empty call stack")
             self.pc = self._call_stack.pop()
             self._branch_taken = True
         elif subtype == SysExt.PUSH:
+            # Decrement SP, then store
             value = self._machine.get_register(instr.src1)
             self._stack_pointer = (self._stack_pointer - 1) & 0xFFFF
             self._machine.write_mem(self._stack_pointer, value)
         elif subtype == SysExt.POP:
+            # Load from SP, then increment
             value = self._machine.read_mem(self._stack_pointer)
             self._machine.set_register(instr.src1, value)
             self._stack_pointer = (self._stack_pointer + 1) & 0xFFFF
 
         self._instruction_history.append(instr)
 
+    # ---- Memory and Register Access ----
     def __getitem__(self, addr: int) -> int:
+        """Memory read with bounds checking"""
         if not (0 <= addr < self.MEMORY_SIZE):
             raise IndexError(f"Address {addr} out of range")
         return self._machine.read_mem(addr)
 
     def __setitem__(self, addr: int, value: int) -> None:
+        """Memory write with bounds checking"""
         if not (0 <= addr < self.MEMORY_SIZE):
             raise IndexError(f"Address {addr} out of range")
         if not (0 <= value <= 0xFFFF):
@@ -321,13 +343,17 @@ class CPU:
         self._machine.write_mem(addr, value)
 
     def get_reg(self, reg: int) -> int:
+        """Get register value"""
         return self._machine.get_register(reg)
 
     def set_reg(self, reg: int, value: int) -> None:
+        """Set register value"""
         self._machine.set_register(reg, value)
 
+    # ---- Properties ----
     @property
     def registers(self) -> List[int]:
+        """Snapshot of all 8 registers"""
         return [self.get_reg(i) for i in range(self.NUM_REGISTERS)]
 
     @property
@@ -372,7 +398,12 @@ class CPU:
     def stack_pointer(self, value: int) -> None:
         self._stack_pointer = value & 0xFFFF
 
+    # ---- Assembler Helper ----
     def assemble(self, op: str, *args) -> List[int]:
+        """
+        Assemble a single instruction into 16-bit words.
+        Returns a list of 1 or 2 words depending on instruction type.
+        """
         op = op.upper()
         if op in ALUOp.__members__:
             opcode = ALUOp[op]
@@ -410,12 +441,15 @@ class CPU:
         raise ValueError(f"Unknown instruction: {op} {args}")
 
     def assemble_program(self, instructions: List[tuple]) -> List[int]:
+        """Assemble a sequence of instructions into machine code"""
         program = []
         for instr in instructions:
             program.extend(self.assemble(*instr))
         return program
 
+    # ---- Debugging ----
     def dump(self, start: int = 0, end: int = 0x20) -> None:
+        """Dump memory range and CPU state for debugging"""
         self._machine.dump(start, end)
         print(f"\nCPU State:")
         print(f"  PC: 0x{self.pc:04X}")
@@ -427,6 +461,7 @@ class CPU:
         print(f"  Registers: {self.registers}")
 
     def get_state(self) -> CPUState:
+        """Capture current CPU state as a dataclass snapshot"""
         return CPUState(
             pc=self.pc, cycles=self.cycles, halted=self.halted,
             registers=self.registers, flags=self.flags,
@@ -434,9 +469,11 @@ class CPU:
         )
 
     def get_history(self) -> List[Instruction]:
+        """Return executed instruction history"""
         return self._instruction_history.copy()
 
     def clear_history(self) -> None:
+        """Clear instruction history"""
         self._instruction_history.clear()
 
     def __repr__(self) -> str:
