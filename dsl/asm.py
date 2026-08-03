@@ -47,7 +47,7 @@ every verb lowers to exactly one instruction in order.
 """
 
 from typing import List, Union, Optional, Dict
-from machine import CPU
+from machine_dsl import CPU
 
 
 class Register:
