@@ -20,16 +20,17 @@ def hello_world():
     PROGRAM_BASE = 0x0200
     STRING_ADDR  = 0x4000       # string address
     OUTPUT_PORT  = 0xFFFE       # Memory-mapped output (stdout port)
+    NULL         = 0            # 0-terminator (strings)
 
     # Load string data into memory using
     # CPU.load_string(addr: int, text: str, null_terminate: bool) -> int:
     cpu.load_string(STRING_ADDR, "Hello, World!\n")
 
     init = cpu.assemble_program([
-        ("LDI16", 0, STRING_ADDR),    # R0 = string pointer
-        ("LDI16", 1, OUTPUT_PORT),    # R1 = output port address
-        ("LDI16", 3, 1),              # R3 = 1 (for pointer increment)
-        ("LDI16", 6, 0),              # R6 = 0 (zero constant for CMP)
+        ("LDI16", 0, STRING_ADDR),      # R0 = string pointer
+        ("LDI16", 1, OUTPUT_PORT),      # R1 = output port address
+        ("LDI16", 3, 1),                # R3 = 1 (for pointer increment)
+        ("LDI16", 6, NULL),             # R6 = 0 (zero constant for CMP)
     ])
 
     # Logic

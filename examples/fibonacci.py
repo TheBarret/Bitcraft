@@ -32,21 +32,23 @@ def fibonacci():
     # Segment init + offset
     init_size = len(init)
     loop_addr = 0x0200 + init_size  # :loop_body
-
-    # Block 2
     loop = cpu.assemble_program([
         # Loop next number
         ("ADD", 5, 3, 4),          # R5 = F(k) = F(k-2) + F(k-1)
         ("STIND", 5, 2),           # mem[R2] = R5  (indirect store)
+
         # Shift: R3 = R4, R4 = R5  (using R6 as zero)
         ("ADD", 3, 4, 6),          # R3 = R4 + 0 = R4
         ("ADD", 4, 5, 6),          # R4 = R5 + 0 = R5
+
         # Advance pointer: R2++
         ("LDI16", 0, 1),           # R0 = 1
         ("ADD", 2, 2, 0),          # R2 = R2 + 1
+
         # Decrement counter
         ("LDI16", 0, 1),           # R0 = 1
         ("SUB", 1, 1, 0),          # R1--
+
         # Compare and loop
         ("CMP", 6, 1, 6),          # R1 - 0  (sets zero flag if R1==0)
         ("JNZ", loop_addr),         # If not zero, jump back to loop start
@@ -65,7 +67,7 @@ def fibonacci():
     print(f"Executed {cycles} cycles")
     print(f"Loop address: 0x{loop_addr:04X}")
     print()
-    print("Fibonacci:")
+    print("Fibonacci (max=10):")
     for i in range(10):
         val = cpu[0x3000 + i]
         print(f"  F({i:2d}) = {val:5d}")
