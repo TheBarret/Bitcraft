@@ -166,6 +166,8 @@ class Instruction:
     is_extended: bool = False
     words: int = 1                     # Number of 16-bit words
 
+
+    # inspecting
     def __repr__(self) -> str:
         if self.is_extended:
             if self.subtype == CPUOp.CUSTOM:
@@ -531,10 +533,7 @@ class CPU:
         elif subtype == CPUOp.CALL16:
             # Push return address (current PC + 2) then jump
             if len(self._call_stack) >= self.MAX_CALL_DEPTH:
-                raise CallStackOverflowError(
-                    f"CALL16 nesting exceeded MAX_CALL_DEPTH={self.MAX_CALL_DEPTH} "
-                    f"at PC=0x{self.pc:04X} -> target 0x{instr.address:04X}"
-                )
+                raise CallStackOverflowError(f"CPUOp.CALL16: call stack overflow (PC=0x{self.pc:04X}, MAX_CALL_DEPTH={self.MAX_CALL_DEPTH}, TARGET=0x{instr.address:04X})")
             self._call_stack.append((self.pc + 2) & 0xFFFF)
             self.pc = instr.address
             self._branch_taken = True
@@ -568,28 +567,20 @@ class CPU:
         elif subtype == CPUOp.RET:
             # Pop return address and jump
             if not self._call_stack:
-                raise CallStackUnderflowError(
-                    f"RET executed on empty call stack at PC=0x{self.pc:04X}"
-                )
+                raise CallStackUnderflowError(f"CPUOp.RET: Empty call stack (PC=0x{self.pc:04X})")
             self.pc = self._call_stack.pop()
             self._branch_taken = True
         elif subtype == CPUOp.PUSH:
             # Decrement SP, then store. Guarded against wrapping into low memory.
             new_sp = (self._stack_pointer - 1) & 0xFFFF
             if self._stack_pointer <= self.STACK_LIMIT_LOW:
-                raise StackOverflowError(
-                    f"PUSH would drive SP below STACK_LIMIT_LOW=0x{self.STACK_LIMIT_LOW:04X} "
-                    f"(current SP=0x{self._stack_pointer:04X}) at PC=0x{self.pc:04X}"
-                )
+                raise StackOverflowError(f"CPUOp.PUSH: Stack overflow (PC=0x{self.pc:04X}, SP=0x{self._stack_pointer:04X}, STACK_LIMIT_LOW=0x{self.STACK_LIMIT_LOW:04X})")
             value = self._machine.get_register(instr.src1)
             self._stack_pointer = new_sp
             self._machine.write_mem(self._stack_pointer, value)
         elif subtype == CPUOp.POP:
             if self._stack_pointer >= self.STACK_BASE:
-                raise StackUnderflowError(
-                    f"POP with nothing pushed (SP=0x{self._stack_pointer:04X} == STACK_BASE) "
-                    f"at PC=0x{self.pc:04X}"
-                )
+                raise StackUnderflowError(f"CPUOp.POP: Empty stack (PC=0x{self.pc:04X}, SP=0x{self._stack_pointer:04X} == STACK_BASE)")
             value = self._machine.read_mem(self._stack_pointer)
             self._machine.set_register(instr.src1, value)
             self._stack_pointer = (self._stack_pointer + 1) & 0xFFFF
@@ -600,7 +591,7 @@ class CPU:
     def __getitem__(self, addr: int) -> int:
         """Memory read with bounds checking"""
         if not (0 <= addr < self.MEMORY_SIZE):
-            raise IndexError(f"Address {addr} out of range")
+            raise IndexError(f"Memory: Address {addr} out of range")
         if addr == 0xFFFD:  # Std input port
                 return ord(input()[:1])  # blocking read
         return self._machine.read_mem(addr)
@@ -608,9 +599,9 @@ class CPU:
     def __setitem__(self, addr: int, value: int) -> None:
         """Memory write with bounds checking"""
         if not (0 <= addr < self.MEMORY_SIZE):
-            raise IndexError(f"Address {addr} out of range")
+            raise IndexError(f"Memory: Address {addr} out of range")
         if not (0 <= value <= 0xFFFF):
-            raise ValueError(f"Value {value} out of 16-bit range")
+            raise ValueError(f"memory: Value {value} out of 16-bit range")
         if addr == 0xFFFE:  # Std output port
             print(chr(value & 0xFF), end='', flush=True)
         else:
@@ -673,7 +664,9 @@ class CPU:
         self._machine.set_mode(int(mode))
 
     def get_mode(self) -> Mode:
-        return Mode(self._machine.get_mode())
+        # Default only for now
+        # return Mode(self._machine.get_mode())
+        return Mode.NORMAL
 
     @property
     def halted(self) -> bool:
@@ -725,6 +718,7 @@ class CPU:
                 self._check_u16(addr)
                 self._check_reg(src)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4), addr]
+
             elif op == "LDI16":
                 if len(args) != 2:
                     raise ValueError(f"LDI16 expects (dest, imm), got {len(args)}: {args}")
@@ -814,7 +808,6 @@ class CPU:
     # Debugging
     def dump(self, start: int = 0, end: int = 0x20) -> None:
         """Dump memory range and CPU state for debugging"""
-        self._machine.dump(start, end)
         print(f"\nCPU State:")
         print(f"  PC: 0x{self.pc:04X}")
         print(f"  SP: 0x{self.stack_pointer:04X}")
@@ -823,6 +816,7 @@ class CPU:
         print(f"  Mode: {self.get_mode().name}")
         print(f"  Flags: Z={self.zero} C={self.carry} O={self.overflow}")
         print(f"  Registers: {self.registers}")
+        self._machine.dump(start, end)
 
     def get_state(self) -> CPUState:
         """Capture current CPU state as a dataclass snapshot"""

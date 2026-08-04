@@ -239,13 +239,8 @@ class Program:
     def halt(self) -> "Program":
         return self._emit('HALT')
 
-    def relinquish(self, code: int = 0) -> "Program":
-        """
-        let(R0, code) then halt(). Establishes 'R0 holds the exit code' as a
-        software convention you can check after cpu.run() returns - there's no
-        hardware exit-code concept, this is sugar over LDI16 + HALT.
-        """
-        self.let(R0, code)
+    # Relinquish(int) serves as offset marker for .byte/.data directives
+    def relinquish(self, param: int = 0) -> "Program":
         return self.halt()
 
     # assembly

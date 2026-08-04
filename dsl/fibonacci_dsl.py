@@ -10,11 +10,12 @@ def fibonacci():
     print("Loading CPU...")
     cpu = CPU()
 
+    print("Assembling program...")
     prog = Program(cpu)
     (prog
         .allocate("program")
             .let(R6, 0)              # zero constant for life of program
-            .let(R1, 8)              # 8 more iterations
+            .let(R1, 8)              # 8 iterations
             .let(R2, 0x3002)         # output pointer
             .let(R3, 0)              # F(0) = 0
             .let(R4, 1)              # F(1) = 1
@@ -32,21 +33,23 @@ def fibonacci():
     )
 
     cpu.pc = prog.load()
-    cycles = cpu.run(max_cycles=500)
+    cycles = cpu.run(max_cycles=100)
 
-    print(f"Executed {cycles} cycles")
-    print(f"Loop address: 0x{prog.labels['loop']:04X}")
-    print()
-    print("Fibonacci:")
+    print(f"Finished, executed {cycles} cycles")
+    print(f"\nFibonacci Sequence:")
     for i in range(10):
         val = cpu[0x3000 + i]
         print(f"  F({i:2d}) = {val:5d}")
-    print(f"\nRegisters: {cpu.registers}")
-    print(f"Zero flag: {cpu.zero}")
 
-    print(f"\nInstruction trace ({len(cpu.get_history())} instructions):")
-    for i, instr in enumerate(cpu.get_history()):
-        print(f"  {i:2d}: {instr}")
+
+    #def dump(self, start: int = 0, end: int = 0x20) -> None:
+    cpu.dump(0, 0x0010)
+
+    #print(f"\nRegisters: {cpu.registers}")
+    #print(f"Zero flag: {cpu.zero}")
+    #print(f"\nInstruction trace ({len(cpu.get_history())} instructions):")
+    #for i, instr in enumerate(cpu.get_history()):
+    #    print(f"  {i:2d}: {instr}")
 
 
 if __name__ == "__main__":
