@@ -62,12 +62,10 @@ int machine_step(Machine* state) {
     if (!state || state->halted) return 0;
 
     /* Fetch instruction from memory */
-    // Todo: better value validation
-    // if MEMORY_SIZE = 65536
-    if (state->pc >= MEMORY_SIZE) { // never happens
-        state->halted = 1;
-        return 0;
-    }
+    /* ARCHITECTURAL NOTE:
+     * state->pc is uint16_t.
+     * Since MEMORY_SIZE is 65536, state->pc >= MEMORY_SIZE is mathematically impossible.
+     */
 
     uint16_t instruction = bus_read(&state->bus, state->pc);
     state->pc++;
@@ -272,21 +270,22 @@ int machine_alu_op_traced(Machine* state, uint16_t src1, uint16_t src2,
 /* Debug helpers */
 void machine_dump(Machine* state, uint16_t start, uint16_t end) {
     if (!state) return;
+    // Shows memory region into console
     bus_dump(&state->bus, start, end);
-    printf("\n***[Dump]*****************************************\n");
-    printf("\nMachine:\n");
-    printf("  PC: 0x%04X\n", state->pc);
-    printf("  Cycles: %" PRIu64 "\n", state->cycle_count);
-    printf("  Halted: %s\n", state->halted ? "Yes" : "No");
-    printf("  Mode: %d\n", state->mode);
-    printf("  Flags: Z=%d C=%d O=%d\n",
-           bit_to_uint8(state->bus.flags.zero),
-           bit_to_uint8(state->bus.flags.carry),
-           bit_to_uint8(state->bus.flags.overflow));
-    printf("Registers:\n");
-    for (int i = 0; i < NUM_REGISTERS; i++) {
-        printf(" R%d = 0x%04X\n", i, bus_read(&state->bus, i));
-    }
+    // Top level machine.py already shows these profiles
+    //printf("\n***[Memory Dump]************************************\n");
+    //printf("  PC: 0x%04X\n", state->pc);
+    //printf("  Cycles: %" PRIu64 "\n", state->cycle_count);
+    //printf("  Halted: %s\n", state->halted ? "Yes" : "No");
+    //printf("  Mode: %d\n", state->mode);
+    //printf("  Flags: Z=%d C=%d O=%d\n",
+    //       bit_to_uint8(state->bus.flags.zero),
+    //      bit_to_uint8(state->bus.flags.carry),
+    //       bit_to_uint8(state->bus.flags.overflow));
+    //printf("Registers:\n");
+    //for (int i = 0; i < NUM_REGISTERS; i++) {
+    //    printf(" R%d = 0x%04X\n", i, bus_read(&state->bus, i));
+    //}
 }
 
 const char* machine_op_to_string(ALUOp op) {

@@ -13,35 +13,26 @@ void bus_init(Bus* bus) {
 }
 
 int bus_write(Bus* bus, uint16_t addr, uint16_t value) {
-    // Todo: better value validation
-    // if MEMORY_SIZE = 65536
-    //if (addr >= MEMORY_SIZE) { // never happens
-    //    return 0;
-    //}
+    /* addr is uint16_t, so its maximum value is 65535.
+     * MEMORY_SIZE is 65536, addr >= MEMORY_SIZE is mathematically impossible.
+     * No bounds check is required here.
+     */
     bus->memory[addr] = value;
     return 1;
 }
 
 uint16_t bus_read(const Bus* bus, uint16_t addr) {
-    // Todo: better value validation
-    // if MEMORY_SIZE = 65536
-    //if (addr >= MEMORY_SIZE) { // never happens
-    //    return 0;
-    //}
+    /* addr is uint16_t, so its maximum value is 65535.
+     * MEMORY_SIZE is 65536, addr >= MEMORY_SIZE is mathematically impossible.
+     * No bounds check is required here.
+     */
     return bus->memory[addr];
 }
 
 int bus_execute(Bus* bus, const bit control[4]) {
-    /* Validate addresses */
-
-    // Todo: better value validation
-    // if MEMORY_SIZE = 65536
-
-    //if (bus->addr_a >= MEMORY_SIZE || // never happens
-    //    bus->addr_b >= MEMORY_SIZE || // never happens
-    //    bus->addr_dest >= MEMORY_SIZE) { // never happens
-    //    return 0;
-    //}
+    /* addr_a, addr_b, and addr_dest are uint16_t.
+     * MEMORY_SIZE is 65536, bounds checks are mathematically impossible.
+     */
 
     /* Convert operands from uint16_t to bit[] arrays */
     bit A[BIT_WORD_WIDTH];
@@ -102,13 +93,12 @@ int bus_load_program(Bus* bus, const uint16_t* words, size_t count) {
 }
 
 void bus_dump(const Bus* bus, uint16_t start, uint16_t end) {
-    // Todo: better value validation
-    // if MEMORY_SIZE = 65536
-    //if (start >= MEMORY_SIZE) start = MEMORY_SIZE - 1; // never happens
-    //if (end   >= MEMORY_SIZE) end   = MEMORY_SIZE - 1; // never happens
+    /* Start and end are uint16_t.
+     * MEMORY_SIZE is 65536, bounds checks are mathematically impossible.
+     */
     if (start > end) return;
 
-    printf("Bus memory dump [%03u..%03u]:\n", start, end);
+    printf("Bus [%03u..%03u]:\n", start, end);
     for (uint16_t i = start; i <= end; i++) {
         printf("  [%03u] = 0x%04X", i, bus->memory[i]);
         if (i < NUM_REGISTERS) {

@@ -78,14 +78,14 @@ class SysExt(IntEnum):
     JC    = 0xD     # Jump to 16-bit address if carry flag is set
     # 0xE, 0xF unused
 
-
+# Run-modes
 class Mode(IntEnum):
-    """ALU execution modes"""
-    NORMAL = 0
-    SATURATE = 1
-    SIGNED = 2
-    ROUND = 3
-    POLARITY_INVERT = 4
+    """ALU execution modes (C-side)"""
+    NORMAL = 0 # default operation mode
+    SATURATE = 1 # Todo
+    SIGNED = 2 # Todo
+    ROUND = 3 # Todo
+    POLARITY_INVERT = 4 # Todo
 
 
 # Typed errors
@@ -117,6 +117,7 @@ class StackUnderflowError(MachineError):
     """Raised when POP is executed with nothing pushed (SP already at STACK_BASE)"""
 
 
+# Instruction class
 @dataclass
 class Instruction:
     """Decoded instruction representation"""
@@ -140,6 +141,7 @@ class Instruction:
         return f"<{ALUOp(self.opcode).name} dest={self.dest} src1={self.src1} src2={self.src2}>"
 
 
+# State Snapshot class
 @dataclass
 class CPUState:
     """Snapshot of CPU state"""
@@ -155,6 +157,7 @@ class CPUState:
         return f"SP=0x{self.stack_pointer:04X}, halted={self.halted}, cycles={self.cycles}, flags=Z:{self.flags[0]} C:{self.flags[1]} O:{self.flags[2]}"
 
 
+# Pythonic CPU
 class CPU:
     """
     Core Model:
@@ -164,6 +167,7 @@ class CPU:
       any program containing SYS-prefixed (extended) instructions.
     """
 
+    # Hardcoded boundaries and Offsets (See BUS.H and API.H)
     MEMORY_SIZE = 65536
     NUM_REGISTERS = 8
     PROGRAM_START = 0x0200
@@ -252,22 +256,22 @@ class CPU:
         """Stop execution"""
         self._machine.halt()
 
-    # Validation helpers
-    def _check_reg(self, idx: int, label: str = "register") -> int:
-        """Validate a decoded/assembled register index is within 0-NUM_REGISTERS-1"""
+    # Valid Register Enforcer
+    def _check_reg(self, idx: int) -> int:
+        """Validate register index is 0-7"""
         if not (0 <= idx < self.NUM_REGISTERS):
-            raise InvalidRegisterError(
-                f"Invalid {label} index {idx} (0x{idx:X}): must be 0-{self.NUM_REGISTERS - 1}"
-            )
+            raise InvalidRegisterError(f"Register {idx} out of range (0-{self.NUM_REGISTERS-1})")
         return idx
 
+    # 16bit Values Encorcer
     @staticmethod
-    def _check_u16(value: int, label: str = "value") -> int:
-        """Validate an immediate/address fits in 16 bits"""
+    def _check_u16(value: int) -> int:
+        """Validate 16-bit value"""
         if not (0 <= value <= 0xFFFF):
-            raise ValueError(f"{label} {value} out of 16-bit range (0-65535)")
+            raise ValueError(f"Value {value} out of 16-bit range")
         return value
 
+    # Decoder
     def _decode(self, word: int) -> Instruction:
         """
         Decode a 16-bit instruction word.
@@ -287,21 +291,20 @@ class CPU:
             return extended
 
         # ALU ops always reference real registers on all three fields (#1/#2)
-        self._check_reg(dest, "ALU dest")
-        self._check_reg(src1, "ALU src1")
-        self._check_reg(src2, "ALU src2")
+        self._check_reg(dest)
+        self._check_reg(src1)
+        self._check_reg(src2)
 
         return Instruction(opcode=opcode, dest=dest, src1=src1, src2=src2, is_extended=False, words=1)
 
+    # SYS-Hatch Decoder
     def _decode_extended(self, subtype: int, src1: int, src2: int) -> Instruction:
         """
         Decode SYS extended instructions.
         Many SYS ops require a second 16-bit word (address or immediate).
         """
         if subtype not in SysExt._value2member_map_:
-            raise InvalidInstructionError(
-                f"Unrecognized SYS subtype 0x{subtype:X} at PC=0x{self.pc:04X}"
-            )
+            raise InvalidInstructionError(f"Unrecognized SYS subtype 0x{subtype:X} at PC=0x{self.pc:04X}")
 
         instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2,
                             subtype=subtype, is_extended=True, words=2)
@@ -309,13 +312,13 @@ class CPU:
         second_word = self._machine.read_mem((self.pc + 1) & 0xFFFF)
 
         if subtype == SysExt.LD16:
-            instr.dest = self._check_reg(src1, "LD16 dest")
+            instr.dest = self._check_reg(src1)
             instr.address = second_word
         elif subtype == SysExt.ST16:
             instr.address = second_word
-            instr.src1 = self._check_reg(src1, "ST16 src")
+            instr.src1 = self._check_reg(src1)
         elif subtype == SysExt.LDI16:
-            instr.dest = self._check_reg(src1, "LDI16 dest")
+            instr.dest = self._check_reg(src1)
             instr.immediate = second_word
         elif subtype in (SysExt.JMP16, SysExt.CALL16,
                          SysExt.JZ, SysExt.JNZ, SysExt.JC):
@@ -324,13 +327,13 @@ class CPU:
             # Indirect ops are 1 word: first nybble=src1, second=src2
             instr.words = 1
             if subtype == SysExt.STIND:
-                instr.src1 = self._check_reg(src1, "STIND value reg")   # value register
-                instr.dest = self._check_reg(src2, "STIND addr reg")    # address register
+                instr.src1 = self._check_reg(src1)   # value register
+                instr.dest = self._check_reg(src2)    # address register
             else:  # LDIND
-                instr.dest = self._check_reg(src1, "LDIND dest reg")    # destination register
-                instr.src1 = self._check_reg(src2, "LDIND addr reg")    # address register
+                instr.dest = self._check_reg(src1)    # destination register
+                instr.src1 = self._check_reg(src2)    # address register
         elif subtype in (SysExt.PUSH, SysExt.POP):
-            instr.src1 = self._check_reg(src1, f"{SysExt(subtype).name} reg")
+            instr.src1 = self._check_reg(src1)
             instr.words = 1
         elif subtype in (SysExt.RET, SysExt.HALT):
             instr.src1 = 0
@@ -467,7 +470,7 @@ class CPU:
     def set_reg(self, reg: int, value: int) -> None:
         """Set register value"""
         self._check_reg(reg)
-        self._check_u16(value, "register value")
+        self._check_u16(value)
         self._machine.set_register(reg, value)
 
     def load_string(self, addr: int, text: str, null_terminate: bool = True) -> int:
@@ -547,9 +550,9 @@ class CPU:
             if len(args) != 3:
                 raise ValueError(f"{op} expects 3 register args (dest, src1, src2), got {len(args)}: {args}")
             dest, src1, src2 = args
-            self._check_reg(dest, f"{op} dest")
-            self._check_reg(src1, f"{op} src1")
-            self._check_reg(src2, f"{op} src2")
+            self._check_reg(dest)
+            self._check_reg(src1)
+            self._check_reg(src2)
             return [(opcode << 12) | (dest << 8) | (src1 << 4) | src2]
 
         elif op in SysExt.__members__:
@@ -558,28 +561,28 @@ class CPU:
                 if len(args) != 2:
                     raise ValueError(f"LD16 expects (dest, addr), got {len(args)}: {args}")
                 dest, addr = args
-                self._check_reg(dest, "LD16 dest")
-                self._check_u16(addr, "LD16 addr")
+                self._check_reg(dest)
+                self._check_u16(addr)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), addr]
             elif op == "ST16":
                 if len(args) != 2:
                     raise ValueError(f"ST16 expects (addr, src), got {len(args)}: {args}")
                 addr, src = args
-                self._check_u16(addr, "ST16 addr")
-                self._check_reg(src, "ST16 src")
+                self._check_u16(addr)
+                self._check_reg(src)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4), addr]
             elif op == "LDI16":
                 if len(args) != 2:
                     raise ValueError(f"LDI16 expects (dest, imm), got {len(args)}: {args}")
                 dest, imm = args
-                self._check_reg(dest, "LDI16 dest")
-                self._check_u16(imm, "LDI16 imm")
+                self._check_reg(dest)
+                self._check_u16(imm)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), imm]
             elif op in ("JMP16", "CALL16", "JZ", "JNZ", "JC"):
                 if len(args) != 1:
                     raise ValueError(f"{op} expects (addr,), got {len(args)}: {args}")
                 addr = args[0]
-                self._check_u16(addr, f"{op} addr")
+                self._check_u16(addr)
                 return [(ALUOp.SYS << 12) | (subtype << 8), addr]
             elif op == "HALT":
                 if len(args) != 0:
@@ -589,7 +592,7 @@ class CPU:
                 if len(args) != 1:
                     raise ValueError(f"{op} expects (reg,), got {len(args)}: {args}")
                 src = args[0]
-                self._check_reg(src, f"{op} reg")
+                self._check_reg(src)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4)]
             elif op == "RET":
                 if len(args) != 0:
@@ -599,8 +602,8 @@ class CPU:
                 if len(args) != 2:
                     raise ValueError(f"{op} expects (reg1, reg2), got {len(args)}: {args}")
                 r1, r2 = args
-                self._check_reg(r1, f"{op} reg1")
-                self._check_reg(r2, f"{op} reg2")
+                self._check_reg(r1)
+                self._check_reg(r2)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (r1 << 4) | r2]
 
         raise ValueError(f"Unknown instruction: {op} {args}")
