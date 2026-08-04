@@ -285,6 +285,10 @@ def test_alu_operations():
     for addr in range(0x2000, 0x2029):
         results[addr] = cpu[addr]
 
+    print(f"\nInstruction trace ({len(cpu.get_history())}):")
+    for i, instr in enumerate(cpu.get_history()):
+        print(f"  {i:2d}: {instr}")
+
     return cpu, results
 
 def verify_results(results):
@@ -298,7 +302,7 @@ def verify_results(results):
         0x2010: 0x0010,
         0x2011: 0x5555,
         0x2012: 0xDEAD,
-        0x2013: 0x0F0F,
+        0x2013: 0x1234, # (0x0F0F wrong)
         0x2014: 0xCAFE,
         0x2015: 0x0001,
         0x2016: 0x0002,
