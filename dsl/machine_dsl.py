@@ -1,11 +1,12 @@
 """
-CPU Machine Template - With DSL Assembler (Domain-Specific Language Grammar)
+Machine-DSL Template (Domain-Specific Language)
 Basic CPU with full 16-bit bus addressing
 
 changelog 0.1: initial release
 changelog 0.2: added extended operations (HALT, LD16, ST16, LDI16, JMP16, CALL16, RET, PUSH, POP)
 changelog 0.3: added indirect addressing (STIND, LDIND) and conditional jumps (JZ, JNZ, JC)
 changelog 0.4: added stdio ports, input=0xFFFD, output=0xFFFE, caught before memory __setitem__, __getitem__
+
 changelog 0.5: patch list:
     - opcode/subtype validation (InvalidInstructionError, raised at decode time not execute time)
     - register index validation on all decode paths + assemble() (InvalidRegisterError)
@@ -14,6 +15,7 @@ changelog 0.5: patch list:
     - STIND/LDIND now route through __getitem__/__setitem__ so STDIO ports (0xFFFD/0xFFFE) and
       memory bounds checks apply to indirect access too, matching direct access behavior
     - assemble() now gives explicit arg-count/range errors instead of falling through
+
 changelog 0.6: added opcodes:
     - JNC (Jump if No Carry)
     - JO / JNO (Jump if Overflow / No Overflow)
@@ -27,13 +29,14 @@ changelog 0.6: added opcodes:
 
 changelog 0.7: added load_string(addr: int, text: str, null_terminate: bool), QoL function.
 
-changelog 0.8-DSL:
+changelog 0.8-DSL fork:
     - added Domain-Specific Language assembler (asm.py).
-    - implemented the EXT2 second-level opcode escape (SysExt.EXT2 = 0xE) queued in 0.6.
-    The original 16-slot SysExt space only had 2 free entries (0xE, 0xF),
+    - simplified validation checking routines, renamed structures to reflect their origin more.
+    - implemented the 'Custom opcode' second-level opcode escape (CPUOp.CUSTOM = 0xE) queued in 0.6.
+    The original 16-slot CPUOp space only had 2 free entries (0xE, 0xF),
     not enough room for the 13 ops listed above.
-    EXT2 uses a second word to carry a 4-bit sub-op + operands (like SYS itself extends ALUOp),
-    leaving 0xF and 3 more EXT2 subop slots free for later.
+    COps/Custom uses a second word to carry a 4-bit sub-op + operands (like SYS itself extends ALUOp),
+    leaving 0xF and 3 more COps/Custom subop slots free for later.
     Costs 2 words minimum (3 for JNC/JO/JNO, since they carry a full 16-bit address),
     still cheaper than LDI16+ADD for things like INC.
     No C changes: flag-setting ops (INC/DEC/NEG/TEST/BIT) write directly into the existing AluFlags ctypes struct,
@@ -42,15 +45,15 @@ changelog 0.8-DSL:
 Known Issues & Behavior:
     - Direct access (ST16, LD16): Bypasses STDIO interception, writes/reads raw memory.
     - Indirect access (STIND, LDIND): Routes through __setitem__/__getitem__, triggers STDIO at 0xFFFD/0xFFFE.
-    - SysExt 0xF is unused, will raise InvalidInstructionError if decoded.
-    - EXT2 subops 0xD-0xF are reserved/unused, will raise InvalidInstructionError if decoded.
+    - CPUOp.[0xF] is unused, will raise InvalidInstructionError if decoded.
+    - Custom subops 0xD-0xF are reserved/unused, will raise InvalidInstructionError if decoded.
 """
 
 import ctypes
 from typing import List, Optional, Tuple, Dict, Any
 from enum import IntEnum
 from dataclasses import dataclass, field
-from binding import Machine
+from binding_dsl import Machine
 
 
 class ALUOp(IntEnum):
@@ -73,8 +76,8 @@ class ALUOp(IntEnum):
     SYS = 0xF
 
 
-class SysExt(IntEnum):
-    """SYS instruction subtypes (extended operations)"""
+class CPUOp(IntEnum):
+    """SYS instructions (CPU extended subtypes)"""
     HALT = 0x0      # Halt execution
     LD16 = 0x1      # Load from 16-bit address
     ST16 = 0x2      # Store to 16-bit address
@@ -89,12 +92,12 @@ class SysExt(IntEnum):
     JZ    = 0xB     # Jump to 16-bit address if zero flag is set
     JNZ   = 0xC     # Jump to 16-bit address if zero flag is not set
     JC    = 0xD     # Jump to 16-bit address if carry flag is set
-    EXT2  = 0xE     # Second-level escape - see Ext2Op for the real instruction
-    # 0xF unused
+    CUSTOM  = 0xE   # Second-level escape, Ref: COps instructions
+    #BRKP = 0xF      # Todo: 'Breakpoints' (just idea, not implemented yet)
 
 
-class Ext2Op(IntEnum):
-    """Sub-opcodes reached via SysExt.EXT2 (second word carries this + operands)"""
+class COps(IntEnum):
+    """Sub-opcodes reached via CPUOp.CUSTOM (second word carries this + operands)"""
     NOP  = 0x0
     INC  = 0x1
     DEC  = 0x2
@@ -113,11 +116,11 @@ class Ext2Op(IntEnum):
 
 class Mode(IntEnum):
     """ALU execution modes"""
-    NORMAL = 0
-    SATURATE = 1
-    SIGNED = 2
-    ROUND = 3
-    POLARITY_INVERT = 4
+    NORMAL = 0              # default mode
+    SATURATE = 1            # not implemented yet
+    SIGNED = 2              # not implemented yet
+    ROUND = 3               # not implemented yet
+    POLARITY_INVERT = 4     # not implemented yet
 
 
 # Typed errors
@@ -159,31 +162,31 @@ class Instruction:
     address: Optional[int] = None      # For LD16/ST16/JMP16/.../JNC/JO/JNO
     immediate: Optional[int] = None    # For LDI16
     subtype: Optional[int] = None      # For SYS operations
-    ext2: Optional[int] = None         # For SYS.EXT2 sub-operations
+    custom: Optional[int] = None       # For SYS.CUSTOM sub-operations
     is_extended: bool = False
     words: int = 1                     # Number of 16-bit words
 
     def __repr__(self) -> str:
         if self.is_extended:
-            if self.subtype == SysExt.EXT2:
-                name = Ext2Op(self.ext2).name if self.ext2 is not None else "?"
+            if self.subtype == CPUOp.CUSTOM:
+                name = COps(self.custom).name if self.custom is not None else "?"
                 if self.address is not None:
-                    return f"<EXT2.{name} addr=0x{self.address:04X}>"
+                    return f"<CPU.{name} addr=0x{self.address:04X}>"
                 if name in ("INC", "DEC", "NEG", "SWAP"):
-                    return f"<EXT2.{name} reg={self.dest}>"
+                    return f"<CPU.{name} reg={self.dest}>"
                 if name == "TEST":
-                    return f"<EXT2.{name} r1={self.src1} r2={self.src2}>"
+                    return f"<CPU.{name} r1={self.src1} r2={self.src2}>"
                 if name in ("BIT", "SET", "CLR"):
-                    return f"<EXT2.{name} reg={self.dest} bit={self.src2}>"
+                    return f"<CPU.{name} reg={self.dest} bit={self.src2}>"
                 if name == "XCHG":
-                    return f"<EXT2.{name} r1={self.dest} r2={self.src1}>"
-                return f"<EXT2.{name}>"
+                    return f"<CPU.{name} r1={self.dest} r2={self.src1}>"
+                return f"<CPU.{name}>"
             if self.address is not None:
-                return f"<SYS.{SysExt(self.subtype).name} addr=0x{self.address:04X}, dest={self.dest}>"
+                return f"<CPU.{CPUOp(self.subtype).name} addr=0x{self.address:04X}, dest={self.dest}>"
             if self.immediate is not None:
-                return f"<SYS.{SysExt(self.subtype).name} dest={self.dest} imm=0x{self.immediate:04X}>"
-            return f"<SYS.{SysExt(self.subtype).name}>"
-        return f"<{ALUOp(self.opcode).name} dest={self.dest} src1={self.src1} src2={self.src2}>"
+                return f"<CPU.{CPUOp(self.subtype).name} dest={self.dest} imm=0x{self.immediate:04X}>"
+            return f"<CPU.{CPUOp(self.subtype).name}>"
+        return f"<ALU.{ALUOp(self.opcode).name} dest={self.dest} src1={self.src1} src2={self.src2}>"
 
 
 @dataclass
@@ -263,7 +266,7 @@ class CPU:
         """
         Execute one instruction.
         Returns False if halted, True otherwise.
-        Handles 1-word ALU ops, 2-word SYS extended ops, and 2/3-word EXT2 ops.
+        Handles 1-word ALU ops, 2-word SYS extended ops, and 2/3-word custom ops.
         """
         if self.halted:
             return False
@@ -299,19 +302,19 @@ class CPU:
         self._machine.halt()
 
     # Validation helpers
-    def _check_reg(self, idx: int, label: str = "register") -> int:
+    def _check_reg(self, idx: int) -> int:
         """Validate a decoded/assembled register index is within 0-NUM_REGISTERS-1"""
         if not (0 <= idx < self.NUM_REGISTERS):
             raise InvalidRegisterError(
-                f"Invalid {label} index {idx} (0x{idx:X}): must be 0-{self.NUM_REGISTERS - 1}"
+                f"Invalid register index {idx} (0x{idx:X}): must be 0-{self.NUM_REGISTERS - 1}"
             )
         return idx
 
     @staticmethod
-    def _check_u16(value: int, label: str = "value") -> int:
+    def _check_u16(value: int) -> int:
         """Validate an immediate/address fits in 16 bits"""
         if not (0 <= value <= 0xFFFF):
-            raise ValueError(f"{label} {value} out of 16-bit range (0-65535)")
+            raise ValueError(f"{value} out of 16-bit range (0-65535)")
         return value
 
     def _decode(self, word: int) -> Instruction:
@@ -327,8 +330,8 @@ class CPU:
 
         if opcode == ALUOp.SYS:
             subtype = dest
-            if subtype == SysExt.EXT2:
-                extended = self._decode_ext2()
+            if subtype == CPUOp.CUSTOM:
+                extended = self._decode_custom()
             else:
                 extended = self._decode_extended(subtype, src1, src2)
             extended.opcode = opcode
@@ -336,9 +339,9 @@ class CPU:
             return extended
 
         # ALU ops always reference real registers on all three fields
-        self._check_reg(dest, "ALU dest")
-        self._check_reg(src1, "ALU src1")
-        self._check_reg(src2, "ALU src2")
+        self._check_reg(dest)
+        self._check_reg(src1)
+        self._check_reg(src2)
 
         return Instruction(opcode=opcode, dest=dest, src1=src1, src2=src2, is_extended=False, words=1)
 
@@ -347,78 +350,71 @@ class CPU:
         Decode SYS extended instructions.
         Many SYS ops require a second 16-bit word (address or immediate).
         """
-        if subtype not in SysExt._value2member_map_:
-            raise InvalidInstructionError(
-                f"Unrecognized SYS subtype 0x{subtype:X} at PC=0x{self.pc:04X}"
-            )
+        if subtype not in CPUOp._value2member_map_:
+            raise InvalidInstructionError(f"Unrecognized SYS subtype 0x{subtype:X} at PC=0x{self.pc:04X}")
 
-        instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2,
-                            subtype=subtype, is_extended=True, words=2)
-
+        instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=src1, src2=src2, subtype=subtype, is_extended=True, words=2)
         second_word = self._machine.read_mem((self.pc + 1) & 0xFFFF)
 
-        if subtype == SysExt.LD16:
-            instr.dest = self._check_reg(src1, "LD16 dest")
+        if subtype == CPUOp.LD16:
+            instr.dest = self._check_reg(src1)
             instr.address = second_word
-        elif subtype == SysExt.ST16:
+        elif subtype == CPUOp.ST16:
             instr.address = second_word
-            instr.src1 = self._check_reg(src1, "ST16 src")
-        elif subtype == SysExt.LDI16:
-            instr.dest = self._check_reg(src1, "LDI16 dest")
+            instr.src1 = self._check_reg(src1)
+        elif subtype == CPUOp.LDI16:
+            instr.dest = self._check_reg(src1)
             instr.immediate = second_word
-        elif subtype in (SysExt.JMP16, SysExt.CALL16,
-                         SysExt.JZ, SysExt.JNZ, SysExt.JC):
+        elif subtype in (CPUOp.JMP16, CPUOp.CALL16,
+                         CPUOp.JZ, CPUOp.JNZ, CPUOp.JC):
             instr.address = second_word
-        elif subtype in (SysExt.STIND, SysExt.LDIND):
+        elif subtype in (CPUOp.STIND, CPUOp.LDIND):
             # Indirect ops are 1 word: first nybble=src1, second=src2
             instr.words = 1
-            if subtype == SysExt.STIND:
-                instr.src1 = self._check_reg(src1, "STIND value reg")   # value register
-                instr.dest = self._check_reg(src2, "STIND addr reg")    # address register
+            if subtype == CPUOp.STIND:
+                instr.src1 = self._check_reg(src1)   # value register
+                instr.dest = self._check_reg(src2)    # address register
             else:  # LDIND
-                instr.dest = self._check_reg(src1, "LDIND dest reg")    # destination register
-                instr.src1 = self._check_reg(src2, "LDIND addr reg")    # address register
-        elif subtype in (SysExt.PUSH, SysExt.POP):
-            instr.src1 = self._check_reg(src1, f"{SysExt(subtype).name} reg")
+                instr.dest = self._check_reg(src1)    # destination register
+                instr.src1 = self._check_reg(src2)    # address register
+        elif subtype in (CPUOp.PUSH, CPUOp.POP):
+            instr.src1 = self._check_reg(src1)
             instr.words = 1
-        elif subtype in (SysExt.RET, SysExt.HALT):
+        elif subtype in (CPUOp.RET, CPUOp.HALT):
             instr.src1 = 0
             instr.words = 1
 
         return instr
 
-    def _decode_ext2(self) -> Instruction:
-        """Decode a SysExt.EXT2 instruction - word 2 carries the real sub-op + operands."""
+    def _decode_custom(self) -> Instruction:
+        """Decode a CPUOp.CUSTOM instruction - word 2 carries the real sub-op + operands."""
         word2 = self._machine.read_mem((self.pc + 1) & 0xFFFF)
         subop_raw = (word2 >> 12) & 0xF
-        if subop_raw not in Ext2Op._value2member_map_:
-            raise InvalidInstructionError(
-                f"Unrecognized EXT2 subop 0x{subop_raw:X} at PC=0x{self.pc:04X}"
-            )
-        subop = Ext2Op(subop_raw)
+        if subop_raw not in COps._value2member_map_:
+            raise InvalidInstructionError(f"Unrecognized custom subop 0x{subop_raw:X} at PC=0x{self.pc:04X}")
+        subop = COps(subop_raw)
         a = (word2 >> 8) & 0xF
         b = (word2 >> 4) & 0xF
 
-        instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=0, src2=0,
-                            subtype=SysExt.EXT2, is_extended=True, words=2)
-        instr.ext2 = subop
+        instr = Instruction(opcode=ALUOp.SYS, dest=0, src1=0, src2=0, subtype=CPUOp.CUSTOM, is_extended=True, words=2)
+        instr.custom = subop
 
-        if subop in (Ext2Op.JNC, Ext2Op.JO, Ext2Op.JNO):
+        if subop in (COps.JNC, COps.JO, COps.JNO):
             instr.address = self._machine.read_mem((self.pc + 2) & 0xFFFF)
             instr.words = 3
-        elif subop == Ext2Op.NOP:
+        elif subop == COps.NOP:
             pass
-        elif subop in (Ext2Op.INC, Ext2Op.DEC, Ext2Op.NEG, Ext2Op.SWAP):
-            instr.dest = self._check_reg(a, f"{subop.name} reg")
-        elif subop == Ext2Op.TEST:
-            instr.src1 = self._check_reg(a, "TEST reg1")
-            instr.src2 = self._check_reg(b, "TEST reg2")
-        elif subop in (Ext2Op.BIT, Ext2Op.SET, Ext2Op.CLR):
-            instr.dest = self._check_reg(a, f"{subop.name} reg")
+        elif subop in (COps.INC, COps.DEC, COps.NEG, COps.SWAP):
+            instr.dest = self._check_reg(a)
+        elif subop == COps.TEST:
+            instr.src1 = self._check_reg(a)
+            instr.src2 = self._check_reg(b)
+        elif subop in (COps.BIT, COps.SET, COps.CLR):
+            instr.dest = self._check_reg(a)
             instr.src2 = b  # bit position 0-15, already range-safe (nibble)
-        elif subop == Ext2Op.XCHG:
-            instr.dest = self._check_reg(a, "XCHG reg1")
-            instr.src1 = self._check_reg(b, "XCHG reg2")
+        elif subop == COps.XCHG:
+            instr.dest = self._check_reg(a)
+            instr.src1 = self._check_reg(b)
 
         return instr
 
@@ -433,7 +429,7 @@ class CPU:
     def _set_flags(self, zero: Optional[bool] = None, carry: Optional[bool] = None,
                    overflow: Optional[bool] = None) -> None:
         """
-        Directly write ALU flag bits for Python-implemented EXT2 ops.
+        Directly write ALU flag bits for Python-implemented Custom ops.
         Writes into the same AluFlags ctypes struct the C ALU already populates -
         no new C functions needed, just direct field access per this file's Core Model.
         """
@@ -444,60 +440,60 @@ class CPU:
         if overflow is not None:
             self._machine.state.bus.flags.overflow.v = 1 if overflow else 0
 
-    def _execute_ext2(self, instr: Instruction) -> None:
-        """Execute a SysExt.EXT2 sub-operation. subop validity guaranteed by _decode_ext2."""
-        op = Ext2Op(instr.ext2)
-        if op == Ext2Op.NOP:
+    def _execute_custom(self, instr: Instruction) -> None:
+        """Execute a CPUOp.CUSTOM sub-operation. subop validity guaranteed by _decode_custom."""
+        op = COps(instr.custom)
+        if op == COps.NOP:
             pass
-        elif op == Ext2Op.INC:
+        elif op == COps.INC:
             r = self._machine.get_register(instr.dest)
             new = (r + 1) & 0xFFFF
             self._machine.set_register(instr.dest, new)
             self._set_flags(zero=(new == 0), carry=(r == 0xFFFF), overflow=(r == 0x7FFF))
-        elif op == Ext2Op.DEC:
+        elif op == COps.DEC:
             r = self._machine.get_register(instr.dest)
             new = (r - 1) & 0xFFFF
             self._machine.set_register(instr.dest, new)
             self._set_flags(zero=(new == 0), carry=(r == 0), overflow=(r == 0x8000))
-        elif op == Ext2Op.NEG:
+        elif op == COps.NEG:
             r = self._machine.get_register(instr.dest)
             new = ((~r) + 1) & 0xFFFF
             self._machine.set_register(instr.dest, new)
             self._set_flags(zero=(new == 0), carry=(r != 0), overflow=(r == 0x8000))
-        elif op == Ext2Op.TEST:
+        elif op == COps.TEST:
             a = self._machine.get_register(instr.src1)
             b = self._machine.get_register(instr.src2)
             self._set_flags(zero=((a & b) == 0), carry=False, overflow=False)
-        elif op == Ext2Op.BIT:
+        elif op == COps.BIT:
             r = self._machine.get_register(instr.dest)
             bit = instr.src2
             self._set_flags(zero=(((r >> bit) & 1) == 0))
-        elif op == Ext2Op.SET:
+        elif op == COps.SET:
             r = self._machine.get_register(instr.dest)
             bit = instr.src2
             self._machine.set_register(instr.dest, r | (1 << bit))
-        elif op == Ext2Op.CLR:
+        elif op == COps.CLR:
             r = self._machine.get_register(instr.dest)
             bit = instr.src2
             self._machine.set_register(instr.dest, r & ~(1 << bit) & 0xFFFF)
-        elif op == Ext2Op.XCHG:
+        elif op == COps.XCHG:
             a = self._machine.get_register(instr.dest)
             b = self._machine.get_register(instr.src1)
             self._machine.set_register(instr.dest, b)
             self._machine.set_register(instr.src1, a)
-        elif op == Ext2Op.SWAP:
+        elif op == COps.SWAP:
             r = self._machine.get_register(instr.dest)
             new = ((r & 0xFF) << 8) | ((r >> 8) & 0xFF)
             self._machine.set_register(instr.dest, new)
-        elif op == Ext2Op.JNC:
+        elif op == COps.JNC:
             if not self.carry:
                 self.pc = instr.address
                 self._branch_taken = True
-        elif op == Ext2Op.JO:
+        elif op == COps.JO:
             if self.overflow:
                 self.pc = instr.address
                 self._branch_taken = True
-        elif op == Ext2Op.JNO:
+        elif op == COps.JNO:
             if not self.overflow:
                 self.pc = instr.address
                 self._branch_taken = True
@@ -511,28 +507,28 @@ class CPU:
         Each subtype has different operand requirements and side effects.
         subtype validity is already guaranteed by _decode_extended.
         """
-        subtype = SysExt(instr.subtype)
-        if subtype == SysExt.EXT2:
-            self._execute_ext2(instr)
+        subtype = CPUOp(instr.subtype)
+        if subtype == CPUOp.CUSTOM:
+            self._execute_custom(instr)
             return
-        if subtype == SysExt.HALT:
+        if subtype == CPUOp.HALT:
             self.halt()
-        elif subtype == SysExt.LD16:
+        elif subtype == CPUOp.LD16:
             # Load from absolute 16-bit address into register
             value = self._machine.read_mem(instr.address)
             self._machine.set_register(instr.dest, value)
-        elif subtype == SysExt.ST16:
+        elif subtype == CPUOp.ST16:
             # Store register to absolute 16-bit address
             value = self._machine.get_register(instr.src1)
             self._machine.write_mem(instr.address, value)
-        elif subtype == SysExt.LDI16:
+        elif subtype == CPUOp.LDI16:
             # Load 16-bit immediate into register
             self._machine.set_register(instr.dest, instr.immediate)
-        elif subtype == SysExt.JMP16:
+        elif subtype == CPUOp.JMP16:
             # Unconditional jump - update PC and mark branch taken
             self.pc = instr.address
             self._branch_taken = True
-        elif subtype == SysExt.CALL16:
+        elif subtype == CPUOp.CALL16:
             # Push return address (current PC + 2) then jump
             if len(self._call_stack) >= self.MAX_CALL_DEPTH:
                 raise CallStackOverflowError(
@@ -542,34 +538,34 @@ class CPU:
             self._call_stack.append((self.pc + 2) & 0xFFFF)
             self.pc = instr.address
             self._branch_taken = True
-        elif subtype == SysExt.STIND:
+        elif subtype == CPUOp.STIND:
             # Indirect store: R[src1] -> memory[R[dest]]
             # Routed through __setitem__ so STDIO output port (0xFFFE) and bounds
             # checks apply the same way they do for direct ST16.
             value = self._machine.get_register(instr.src1)
             addr = self._machine.get_register(instr.dest)
             self[addr] = value
-        elif subtype == SysExt.LDIND:
+        elif subtype == CPUOp.LDIND:
             # Indirect load: memory[R[src1]] -> R[dest]
             addr = self._machine.get_register(instr.src1)
             value = self[addr]
             self._machine.set_register(instr.dest, value)
-        elif subtype == SysExt.JZ:
+        elif subtype == CPUOp.JZ:
             # Jump if zero flag set
             if self.zero:
                 self.pc = instr.address
                 self._branch_taken = True
-        elif subtype == SysExt.JNZ:
+        elif subtype == CPUOp.JNZ:
             # Jump if zero flag not set
             if not self.zero:
                 self.pc = instr.address
                 self._branch_taken = True
-        elif subtype == SysExt.JC:
+        elif subtype == CPUOp.JC:
             # Jump if carry flag set
             if self.carry:
                 self.pc = instr.address
                 self._branch_taken = True
-        elif subtype == SysExt.RET:
+        elif subtype == CPUOp.RET:
             # Pop return address and jump
             if not self._call_stack:
                 raise CallStackUnderflowError(
@@ -577,7 +573,7 @@ class CPU:
                 )
             self.pc = self._call_stack.pop()
             self._branch_taken = True
-        elif subtype == SysExt.PUSH:
+        elif subtype == CPUOp.PUSH:
             # Decrement SP, then store. Guarded against wrapping into low memory.
             new_sp = (self._stack_pointer - 1) & 0xFFFF
             if self._stack_pointer <= self.STACK_LIMIT_LOW:
@@ -588,7 +584,7 @@ class CPU:
             value = self._machine.get_register(instr.src1)
             self._stack_pointer = new_sp
             self._machine.write_mem(self._stack_pointer, value)
-        elif subtype == SysExt.POP:
+        elif subtype == CPUOp.POP:
             if self._stack_pointer >= self.STACK_BASE:
                 raise StackUnderflowError(
                     f"POP with nothing pushed (SP=0x{self._stack_pointer:04X} == STACK_BASE) "
@@ -628,7 +624,7 @@ class CPU:
     def set_reg(self, reg: int, value: int) -> None:
         """Set register value"""
         self._check_reg(reg)
-        self._check_u16(value, "register value")
+        self._check_u16(value)
         self._machine.set_register(reg, value)
 
     def load_string(self, addr: int, text: str, null_terminate: bool = True) -> int:
@@ -708,39 +704,39 @@ class CPU:
             if len(args) != 3:
                 raise ValueError(f"{op} expects 3 register args (dest, src1, src2), got {len(args)}: {args}")
             dest, src1, src2 = args
-            self._check_reg(dest, f"{op} dest")
-            self._check_reg(src1, f"{op} src1")
-            self._check_reg(src2, f"{op} src2")
+            self._check_reg(dest)
+            self._check_reg(src1)
+            self._check_reg(src2)
             return [(opcode << 12) | (dest << 8) | (src1 << 4) | src2]
 
-        elif op in SysExt.__members__ and op != "EXT2":
-            subtype = SysExt[op]
+        elif op in CPUOp.__members__ and op != "CUSTOM":
+            subtype = CPUOp[op]
             if op == "LD16":
                 if len(args) != 2:
                     raise ValueError(f"LD16 expects (dest, addr), got {len(args)}: {args}")
                 dest, addr = args
-                self._check_reg(dest, "LD16 dest")
-                self._check_u16(addr, "LD16 addr")
+                self._check_reg(dest)
+                self._check_u16(addr)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), addr]
             elif op == "ST16":
                 if len(args) != 2:
                     raise ValueError(f"ST16 expects (addr, src), got {len(args)}: {args}")
                 addr, src = args
-                self._check_u16(addr, "ST16 addr")
-                self._check_reg(src, "ST16 src")
+                self._check_u16(addr)
+                self._check_reg(src)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4), addr]
             elif op == "LDI16":
                 if len(args) != 2:
                     raise ValueError(f"LDI16 expects (dest, imm), got {len(args)}: {args}")
                 dest, imm = args
-                self._check_reg(dest, "LDI16 dest")
-                self._check_u16(imm, "LDI16 imm")
+                self._check_reg(dest)
+                self._check_u16(imm)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (dest << 4), imm]
             elif op in ("JMP16", "CALL16", "JZ", "JNZ", "JC"):
                 if len(args) != 1:
                     raise ValueError(f"{op} expects (addr,), got {len(args)}: {args}")
                 addr = args[0]
-                self._check_u16(addr, f"{op} addr")
+                self._check_u16(addr)
                 return [(ALUOp.SYS << 12) | (subtype << 8), addr]
             elif op == "HALT":
                 if len(args) != 0:
@@ -750,7 +746,7 @@ class CPU:
                 if len(args) != 1:
                     raise ValueError(f"{op} expects (reg,), got {len(args)}: {args}")
                 src = args[0]
-                self._check_reg(src, f"{op} reg")
+                self._check_reg(src)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (src << 4)]
             elif op == "RET":
                 if len(args) != 0:
@@ -760,13 +756,13 @@ class CPU:
                 if len(args) != 2:
                     raise ValueError(f"{op} expects (reg1, reg2), got {len(args)}: {args}")
                 r1, r2 = args
-                self._check_reg(r1, f"{op} reg1")
-                self._check_reg(r2, f"{op} reg2")
+                self._check_reg(r1)
+                self._check_reg(r2)
                 return [(ALUOp.SYS << 12) | (subtype << 8) | (r1 << 4) | r2]
 
-        elif op in Ext2Op.__members__:
-            subop = Ext2Op[op]
-            word1 = (ALUOp.SYS << 12) | (SysExt.EXT2 << 8)
+        elif op in COps.__members__:
+            subop = COps[op]
+            word1 = (ALUOp.SYS << 12) | (CPUOp.CUSTOM << 8)
             if op == "NOP":
                 if len(args) != 0:
                     raise ValueError(f"NOP expects no args, got {len(args)}: {args}")
@@ -775,20 +771,20 @@ class CPU:
                 if len(args) != 1:
                     raise ValueError(f"{op} expects (reg,), got {len(args)}: {args}")
                 reg = args[0]
-                self._check_reg(reg, f"{op} reg")
+                self._check_reg(reg)
                 return [word1, (subop << 12) | (reg << 8)]
             elif op == "TEST":
                 if len(args) != 2:
                     raise ValueError(f"TEST expects (reg1, reg2), got {len(args)}: {args}")
                 a, b = args
-                self._check_reg(a, "TEST reg1")
-                self._check_reg(b, "TEST reg2")
+                self._check_reg(a)
+                self._check_reg(b)
                 return [word1, (subop << 12) | (a << 8) | (b << 4)]
             elif op in ("BIT", "SET", "CLR"):
                 if len(args) != 2:
                     raise ValueError(f"{op} expects (reg, bit), got {len(args)}: {args}")
                 reg, bit = args
-                self._check_reg(reg, f"{op} reg")
+                self._check_reg(reg)
                 if not (0 <= bit <= 15):
                     raise ValueError(f"{op} bit position {bit} out of range (0-15)")
                 return [word1, (subop << 12) | (reg << 8) | (bit << 4)]
@@ -796,14 +792,14 @@ class CPU:
                 if len(args) != 2:
                     raise ValueError(f"XCHG expects (reg1, reg2), got {len(args)}: {args}")
                 a, b = args
-                self._check_reg(a, "XCHG reg1")
-                self._check_reg(b, "XCHG reg2")
+                self._check_reg(a)
+                self._check_reg(b)
                 return [word1, (subop << 12) | (a << 8) | (b << 4)]
             elif op in ("JNC", "JO", "JNO"):
                 if len(args) != 1:
                     raise ValueError(f"{op} expects (addr,), got {len(args)}: {args}")
                 addr = args[0]
-                self._check_u16(addr, f"{op} addr")
+                self._check_u16(addr)
                 return [word1, (subop << 12), addr]
 
         raise ValueError(f"Unknown instruction: {op} {args}")
