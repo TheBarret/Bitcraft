@@ -6,6 +6,10 @@ A Python-Controlled Gate-Level Arithmetic Engine
 A Python library that exposes a complete 16-bit CPU data paths (ALU, memory, bus) implemented in C,  
 but controlled entirely from Python.   
 
+## Assembly Language Concept (DSL)
+
+See example at [DSL readme](dsl/).  
+
 # Opcode scheme (Cheat Sheet)
 
 ### C-Runtime Operations (ALU & Logic)
