@@ -1,22 +1,93 @@
-# BITCRAFT-DSL Concept Language
+# BITCRAFT-DSL
 
-Using a modified Bitcraft CPU model to facilitate the DSL version illustrating how to build a basic assembler.  
+The DSL version demonstrates how to build a functional assembler for a Bitcraft CPU model.  
+It provides a more readable syntax for writing small programs, compatibility with the underlying CPU architecture.  
 
-**Changelog: machine_dsl.py (0.8-DSL):**
-- added Domain-Specific Language assembler (asm.py).
-- simplified validation checking routines, renamed structures to reflect their origin more.
-- implemented the 'Custom opcode' second-level opcode escape (CPUOp.CUSTOM = 0xE) queued in 0.6.
+**Changes:**  
+- **Assembler**: Added `asm.py` frontend
+- **Custom Opcodes**: Extended instructions with second-level escape mechanism (`CPUOp.CUSTOM = 0xE`)
+- **Strictly Sequential**: One instruction issued per step
+- **No Parallelism**: No multi-issue or parallel execution support
+- **Deterministic**: Every DSL verb lowers to exactly one instruction in order
 
-*The original 16-slot CPU `SYS` specific ops space only had 2 free entries (`0xE, 0xF`), not enough room.  
-`COps/Custom` uses a second word to carry a 4-bit sub-op + operands (like `SYS` itself extends `ALUOp`),  
-leaving `0xF` and 3 more `COps/Custom` subop slots free for later.  
-Costs 2 words minimum (3 for `JNC/JO/JNO`, since they carry a full 16-bit address), cheaper than `LDI16+ADD` for things like `INC`.  
-No C changes: flag-setting ops (INC/DEC/NEG/TEST/BIT) write directly into the existing `AluFlags ctypes struct`,  
-the same struct the C ALU already populates.*  
+**Custom Opcodes:**  
+- **Two-Word Encoding**: Uses a second 16-bit word to carry a 4-bit sub-opcode plus operands
+- **Cost Model**: 
+  - 2 words minimum for most operations
+  - 3 words for conditional jumps (`JNC`, `JO`, `JNO`) that require a full 16-bit address
+  - More efficient than `LDI16+ADD` sequences for simple operations like `INC`
 
-This CPU variant (DSL) is strictly sequential (one instruction issued per step).  
-There's no multi-issue/parallel execution, so there's no DSL surface here promising simultaneity,  
-every verb lowers to exactly one instruction in order.  
+**Flag Handling:**  
+All flag-setting operations (`INC`, `DEC`, `NEG`, `TEST`, `BIT`) write directly to the existing `AluFlags` ctypes struct,  
+maintaining compatibility with the C ALU's flag population mechanism.  
+
+## Known Issues & Behavior Notes
+
+- **Direct Access (`ST16`, `LD16`)**: Bypasses STDIO interception, reads/writes raw memory
+- **Indirect Access (`STIND`, `LDIND`)**: Routes through Python's `__setitem__`/`__getitem__`, triggering STDIO at addresses `0xFFFD`/`0xFFFE`
+- **Unused Opcodes**: `CPUOp.0xF` is unused and will raise `InvalidInstructionError` if decoded
+- **Reserved Custom Subops**: `COps` values `0xD-0xF` are reserved and raise `InvalidInstructionError`
+
+#### Data Movement
+| DSL Verb | Description | Example |
+|----------|-------------|---------|
+| `let(dest, value)` | Load immediate or copy register | `let(R1, 8)` or `let(R3, R4)` |
+| `write(addr, src)` | Direct memory store (ST16) | `write(0x3000, R3)` |
+| `seti(addr_reg, val_reg)` | Indirect memory store (STIND) | `seti(R2, R5)` |
+| `geti(dest, addr_reg)` | Indirect memory load (LDIND) | `geti(R0, R1)` |
+
+#### Arithmetic & Logic (3-Register ALU)
+| DSL Verb | Operation | Example |
+|----------|-----------|---------|
+| `add(dest, a, b)` | `dest = a + b` | `add(R5, R3, R4)` |
+| `sub(dest, a, b)` | `dest = a - b` | |
+| `andb(dest, a, b)` | `dest = a & b` | |
+| `orb(dest, a, b)` | `dest = a \| b` | |
+| `xorb(dest, a, b)` | `dest = a ^ b` | |
+| `compare(a, b)` | Set flags only (`a - b`) | `compare(R0, R1)` |
+
+#### In-Place Operations
+| DSL Verb | Description | Example |
+|----------|-------------|---------|
+| `inc(reg)` | Increment register | `inc(R2)` |
+| `dec(reg)` | Decrement register | `dec(R1)` |
+| `neg(reg)` | Two's complement negation | `neg(R0)` |
+| `swap(reg)` | Swap high/low bytes | `swap(R0)` |
+| `xchg(a, b)` | Exchange two registers | `xchg(R0, R1)` |
+
+#### Bit Operations
+| DSL Verb | Description | Example |
+|----------|-------------|---------|
+| `test(a, b)` | AND without storing (flags only) | `test(R0, R1)` |
+| `testbit(reg, bit)` | Test specific bit (0-15) | `testbit(R0, 3)` |
+| `setbit(reg, bit)` | Set specific bit | `setbit(R1, 7)` |
+| `clrbit(reg, bit)` | Clear specific bit | `clrbit(R2, 15)` |
+
+#### Control Flow
+| DSL Verb | Description | Example |
+|----------|-------------|---------|
+| `jmp(label)` | Unconditional jump | `jmp("loop")` |
+| `call(label)` | Subroutine call | `call("func")` |
+| `ret()` | Return from subroutine | `ret()` |
+| `ifz(label)` | Jump if zero flag set | `ifz("done")` |
+| `ifnz(label)` | Jump if zero flag clear | `ifnz("loop")` |
+| `ifc(label)` | Jump if carry flag set | `ifc("error")` |
+| `ifnc(label)` | Jump if carry flag clear | `ifnc("continue")` |
+| `ifo(label)` | Jump if overflow flag set | `ifo("overflow")` |
+| `ifno(label)` | Jump if overflow flag clear | `ifno("ok")` |
+
+#### Stack Operations
+| DSL Verb | Description | Example |
+|----------|-------------|---------|
+| `push(reg)` | Push register to stack | `push(R0)` |
+| `pop(reg)` | Pop register from stack | `pop(R0)` |
+
+#### System
+| DSL Verb | Description | Example |
+|----------|-------------|---------|
+| `nop()` | No operation | `nop()` |
+| `halt()` | Halt execution | `halt()` |
+| `relinquish(code)` | Set R0=code, then halt | `relinquish(0)` |
 
 **Fibonacci in DSL assembly:**  
 ```py
@@ -144,24 +215,4 @@ Instruction trace (65 instructions):
   63: <CPU.LDI16 dest=0 imm=0x0000>
   64: <CPU.HALT>
 ```
-
-Reference (Verb):  
--    `allocate(name)`          mark a label at the current word offset
--    `let(dest, value)`        dest = value  (int -> LDI16, Register -> PASS_B copy)
--    `write(addr, src)`        memory[addr] = src   (direct, ST16)
--    `seti(addr_reg, val_reg)` memory[addr_reg] = val_reg   (indirect, STIND)
--    `geti(dest, addr_reg)`    dest = memory[addr_reg]      (indirect, LDIND)
--    `add/sub/andb/orb/xorb(dest, a, b)`   3-register ALU ops
--    `compare(a, b)`           sets flags only (a - b), dest is a hardware-ignored placeholder
--    `inc/dec/neg/swap(reg)`   in-place register ops (EXT2)
--    `test(a, b)`              flags-only AND (EXT2)
--    `setbit/clrbit/testbit(reg, bit)`   bit ops, bit is 0-15 (EXT2)
--    `xchg(a, b)`               swap two registers, no temp needed (EXT2)
--    `nop()`                    no-op (EXT2)
--    `jmp/call(label)`          unconditional jump / call
--    `ifz/ifnz/ifc(label)`      conditional jump on zero/not-zero/carry
--    `ifnc/ifo/ifno(label)`     conditional jump on not-carry/overflow/not-overflow (EXT2)
--    `ret() / push(reg) / pop(reg) / halt()`
--    `relinquish(code=0)`       let(R0, code) then halt() - "exit code" convention, not real hardware
-
 
