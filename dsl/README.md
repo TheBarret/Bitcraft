@@ -1,6 +1,19 @@
 # BITCRAFT-DSL Concept Language
 
-Using the Bitcraft CPU framework, the DSL version illustrates how to build an assembler.  
+Using a modified Bitcraft CPU model to facilitate the DSL version illustrating how to build a basic assembler.  
+
+**Changelog: machine_dsl.py (0.8-DSL):**
+- added Domain-Specific Language assembler (asm.py).
+- simplified validation checking routines, renamed structures to reflect their origin more.
+- implemented the 'Custom opcode' second-level opcode escape (CPUOp.CUSTOM = 0xE) queued in 0.6.
+
+*The original 16-slot CPU `SYS` specific ops space only had 2 free entries (`0xE, 0xF`), not enough room.  
+`COps/Custom` uses a second word to carry a 4-bit sub-op + operands (like `SYS` itself extends `ALUOp`),  
+leaving `0xF` and 3 more `COps/Custom` subop slots free for later.  
+Costs 2 words minimum (3 for `JNC/JO/JNO`, since they carry a full 16-bit address), cheaper than `LDI16+ADD` for things like `INC`.  
+No C changes: flag-setting ops (INC/DEC/NEG/TEST/BIT) write directly into the existing `AluFlags ctypes struct`,  
+the same struct the C ALU already populates.*  
+
 This CPU variant (DSL) is strictly sequential (one instruction issued per step).  
 There's no multi-issue/parallel execution, so there's no DSL surface here promising simultaneity,  
 every verb lowers to exactly one instruction in order.  
